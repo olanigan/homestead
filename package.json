@@ -1,0 +1,57 @@
+{
+  "name": "homestead-ai",
+  "version": "0.0.2",
+  "description": "Your Local AI Harness",
+  "author": "Ibrahim Olanigan",
+  "type": "module",
+  "bin": {
+    "homestead": "dist/homestead.js"
+  },
+  "main": "dist/types.js",
+  "types": "dist/types.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./dist/types.js",
+    "./registry": "./dist/core/registry.js"
+  },
+  "scripts": {
+    "build": "npm run build:ui && tsc",
+    "build:ui": "cd src/ui/frontend && npm run build",
+    "dev": "tsc --watch",
+    "start": "node dist/homestead.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts'"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "hono": "^4.7.5",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.9",
+    "@types/node": "^25.9.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/olanigan/homestead.git"
+  },
+  "homepage": "https://homesteadai.dev",
+  "keywords": [
+    "llm",
+    "local-ai",
+    "ollama",
+    "llamacpp",
+    "mlx",
+    "model-registry",
+    "cli"
+  ]
+}

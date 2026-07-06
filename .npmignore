@@ -1,0 +1,9 @@
+node_modules/
+*.db
+*.log
+.env
+.env.*
+.DS_Store
+src/
+tsconfig.json
+bun.lock
