@@ -22,8 +22,8 @@ curl -fsSL https://bun.sh/install | bash
 
 # Clone and run
 npm install -g homestead-ai
-git clone https://github.com/clawcenter/homestead-ai.git
-cd homestead-ai
+git clone https://github.com/olanigan/homestead.git
+cd homestead
 bun install
 homestead discover   # Find all your local models
 homestead serve model-name  # Serve any model on :8080
@@ -60,4 +60,4 @@ engine. It sits above them all and provides a single pane of glass.
 
 Apache 2.0 OR MIT — your choice. See `LICENSE`.
 
-For more information, visit https://clawcenter.io/homestead.
+For more information, visit https://homesteadai.dev.
