@@ -508,3 +508,38 @@ export class LlamaCppAdapter implements EngineAdapter {
   private modelPath = ""
 }
 
+export class EngineManager {
+  private adapters: EngineAdapter[] = []
+
+  constructor() {
+    this.adapters.push(new OllamaAdapter())
+    this.adapters.push(new LlamaCppAdapter())
+  }
+
+  register(adapter: EngineAdapter): void {
+    this.adapters.push(adapter)
+  }
+
+  selectEngine(model: ModelRecord): EngineAdapter | null {
+    const candidates = this.adapters
+      .filter((a) => a.canHandle(model))
+      .sort((a, b) => b.priority - a.priority)
+    return candidates[0] || null
+  }
+
+  getAdapter(kind: string): EngineAdapter | undefined {
+    return this.adapters.find((a) => a.kind === kind)
+  }
+
+  async allStatuses(): Promise<EngineStatus[]> {
+    const statuses = await Promise.all(this.adapters.map((a) => a.status()))
+    return statuses
+  }
+
+  getRunningProcesses(): ServingProcess[] {
+    return Array.from(runningProcesses.values())
+  }
+}
+
+export const engineManager = new EngineManager()
+

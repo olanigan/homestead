@@ -10,7 +10,9 @@
   "main": "dist/types.js",
   "types": "dist/types.d.ts",
   "files": [
-    "dist",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.json",
     "README.md",
     "LICENSE"
   ],
