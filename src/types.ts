@@ -86,3 +86,17 @@ export interface CliOptions {
   format?: string
   json?: boolean
 }
+
+export interface StreamEvent {
+  kind: "reasoning" | "content"
+  text: string
+}
+
+export interface ChatOptions {
+  maxTokens?: number
+  temperature?: number
+  topP?: number
+  topK?: number
+  repeatPenalty?: number
+  stop?: string[]
+}
