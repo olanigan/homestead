@@ -1,3 +1,5 @@
+import { existsSync, statSync } from "node:fs"
+import { resolve } from "node:path"
 import { Command } from "commander"
 import type { ModelSource, ModelRecord, ServingProcess } from "../types.js"
 import { Registry } from "../core/registry.js"
@@ -129,10 +131,31 @@ export function registerCli(program: Command): void {
     .argument("<name>", "Model name or ID")
     .option("-p, --port <port>", "Port to serve on", "8080")
     .action(async (name: string, opts: { port: string }) => {
-      const model = registry.get(name)
+      let model = registry.get(name)
       if (!model) {
-        logger.error(`Model not found: ${name}. Run 'homestead discover' first.`)
-        process.exit(1)
+        if (existsSync(name)) {
+          const stat = statSync(name)
+          const fileName = name.split("/").pop()?.replace(/\.\w+$/, "") || "model"
+          const isGguf = name.endsWith(".gguf")
+          model = {
+            id: `inline-${fileName.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+            name: fileName,
+            source: "imported",
+            sourceId: resolve(name),
+            path: resolve(name),
+            sizeBytes: stat.size,
+            format: isGguf ? "gguf" : "unknown",
+            quantization: null,
+            engine: isGguf ? "llama.cpp" : null,
+            status: "discovered",
+            metadata: { tags: isGguf ? ["weights"] : ["unknown"] },
+            discoveredAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          }
+        } else {
+          logger.error(`Model not found: ${name}. Provide a valid model name or file path.`)
+          process.exit(1)
+        }
       }
       const tags = (model.metadata?.tags as string[]) || []
       if (tags.includes("vocab")) {
