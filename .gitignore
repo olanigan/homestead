@@ -8,3 +8,6 @@ dist/
 .project
 bun.lockb
 package-lock.json
+.npmrc
+*.tsbuildinfo
+justfile
