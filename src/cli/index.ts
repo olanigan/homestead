@@ -274,14 +274,27 @@ export function registerCli(program: Command): void {
         const repo = uri.replace("hf://", "")
         logger.log(`Pulling ${repo} from HuggingFace...`)
         const { spawn } = await import("node:child_process")
-        const proc = spawn("huggingface-cli", ["download", repo, "--resume-download"], {
-          stdio: "inherit",
-          env: { ...process.env, HF_HUB_ENABLE_HF_TRANSFER: "1" },
-        })
-        await new Promise<void>((resolve, reject) => {
-          proc.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`huggingface-cli exited ${code}`)))
-          proc.on("error", reject)
-        })
+        // Don't set HF_HUB_ENABLE_HF_TRANSFER: if the optional hf_transfer
+        // package isn't installed, huggingface_hub aborts the download
+        // instead of falling back. Users who want it can opt in via env.
+        const download = (cmd: string) =>
+          new Promise<void>((resolve, reject) => {
+            const proc = spawn(cmd, ["download", repo], { stdio: "inherit" })
+            proc.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`)))
+            proc.on("error", reject)
+          })
+        try {
+          await download("hf")
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err
+          // Older huggingface_hub installs only ship the deprecated shim
+          try {
+            await download("huggingface-cli")
+          } catch (fallbackErr) {
+            if ((fallbackErr as NodeJS.ErrnoException).code !== "ENOENT") throw fallbackErr
+            throw new Error("Neither `hf` nor `huggingface-cli` found on PATH. Install with `pip install -U huggingface_hub`.")
+          }
+        }
         logger.log("Done. Run `homestead discover` to register.")
       } else if (uri.startsWith("http")) {
         logger.log(`Downloading from ${uri}...`)
