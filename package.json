@@ -18,7 +18,8 @@
   ],
   "exports": {
     ".": "./dist/types.js",
-    "./registry": "./dist/core/registry.js"
+    "./registry": "./dist/core/registry.js",
+    "./hf-download": "./dist/core/hf-download.js"
   },
   "scripts": {
     "build": "npm run build:ui && tsc",
@@ -29,6 +30,7 @@
     "lint": "eslint 'src/**/*.ts'"
   },
   "dependencies": {
+    "@huggingface/hub": "^2.13.3",
     "commander": "^13.1.0",
     "hono": "^4.7.5",
     "zod": "^3.24.4"

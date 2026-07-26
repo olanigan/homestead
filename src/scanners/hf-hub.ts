@@ -175,12 +175,16 @@ export async function scanHfHub(): Promise<ModelRecord[]> {
     const tags = determineTags(ref, ggufFiles)
     if (tags.includes("vocab")) continue
 
+    const modelPath = ref.detectedFormat === "gguf"
+      ? (ggufFiles.find((f) => !f.path.includes("mmproj"))?.path ?? ggufFiles[0]?.path ?? ref.path)
+      : ref.path
+
     models.push({
       id,
       name: modelFullName,
       source: "hf-hub",
       sourceId: `huggingface/${modelFullName}`,
-      path: ref.path,
+      path: modelPath,
       sizeBytes: ref.totalBytes,
       format: ref.detectedFormat,
       quantization: ref.quantization,

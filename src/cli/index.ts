@@ -259,7 +259,9 @@ export function registerCli(program: Command): void {
     .command("pull")
     .description("Download a model from HuggingFace, Ollama, or URL")
     .argument("<uri>", "Model URI (hf://org/model, ollama://model, or http URL)")
-    .action(async (uri: string) => {
+    .option("--list", "List GGUF files only (HF repos)")
+    .option("--file <glob>", "Download files matching glob (HF repos)")
+    .action(async (uri: string, opts: { list?: boolean; file?: string }) => {
       if (uri.startsWith("ollama://")) {
         const modelName = uri.replace("ollama://", "")
         logger.log(`Pulling ${modelName} from Ollama...`)
@@ -272,17 +274,8 @@ export function registerCli(program: Command): void {
         logger.log("Done. Run `homestead discover` to register.")
       } else if (uri.startsWith("hf://")) {
         const repo = uri.replace("hf://", "")
-        logger.log(`Pulling ${repo} from HuggingFace...`)
-        const { spawn } = await import("node:child_process")
-        const proc = spawn("huggingface-cli", ["download", repo, "--resume-download"], {
-          stdio: "inherit",
-          env: { ...process.env, HF_HUB_ENABLE_HF_TRANSFER: "1" },
-        })
-        await new Promise<void>((resolve, reject) => {
-          proc.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`huggingface-cli exited ${code}`)))
-          proc.on("error", reject)
-        })
-        logger.log("Done. Run `homestead discover` to register.")
+        const { pullGguf } = await import("../core/hf-download.js")
+        await pullGguf(repo, { listOnly: opts.list, file: opts.file })
       } else if (uri.startsWith("http")) {
         logger.log(`Downloading from ${uri}...`)
         const filename = uri.split("/").pop() || "model.gguf"
