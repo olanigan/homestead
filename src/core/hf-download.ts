@@ -2,6 +2,7 @@ import { listFiles, downloadFileToCacheDir } from "@huggingface/hub"
 import type { AccessToken, RepoDesignation } from "@huggingface/hub"
 import { existsSync } from "node:fs"
 import { spawn } from "node:child_process"
+import { createInterface } from "node:readline"
 
 export interface GgufFile {
   path: string
@@ -108,7 +109,7 @@ export async function downloadFiles(
 
 export async function pullGguf(
   repo: string,
-  opts?: { token?: string; dest?: string; listOnly?: boolean }
+  opts?: { token?: string; dest?: string; listOnly?: boolean; file?: string }
 ): Promise<void> {
   const token = opts?.token ?? process.env.HF_TOKEN
 
@@ -122,23 +123,52 @@ export async function pullGguf(
   const mmprojFiles = files.filter((f) => f.isMmproj)
 
   console.log(`\n  GGUF files in ${repo}:\n`)
-  console.log(`  ${"FILE".padEnd(60)} ${"SIZE".padEnd(12)} ${"AUTO"}`)
-  console.log(`  ${"─".repeat(60)} ${"─".repeat(12)} ${"─".repeat(6)}`)
+  console.log(`  ${"FILE".padEnd(60)} ${"SIZE".padEnd(12)}`)
+  console.log(`  ${"─".repeat(60)} ${"─".repeat(12)}`)
 
   for (const f of [...baseFiles, ...mmprojFiles]) {
     const name = f.path.split("/").pop() ?? f.path
     const displayName = name.length > 58 ? name.slice(0, 55) + "..." : name
     const sizeStr = formatBytes(f.size)
-    const auto = f.isMmproj ? "● (auto)" : "●"
-    console.log(`  ${displayName.padEnd(60)} ${sizeStr.padEnd(12)} ${auto}`)
+    console.log(`  ${displayName.padEnd(60)} ${sizeStr.padEnd(12)}`)
   }
 
   if (opts?.listOnly) return
 
-  const downloadList = autoSelectMmproj(
-    baseFiles.length > 0 ? [baseFiles[0]!] : [],
-    files
-  )
+  let selected: GgufFile[]
+
+  if (opts?.file) {
+    const pattern = opts.file.toLowerCase()
+    selected = baseFiles.filter((f) => {
+      const name = (f.path.split("/").pop() ?? "").toLowerCase()
+      if (pattern.includes("*")) {
+        return name.includes(pattern.replace(/\*/g, "").replace(/\.(gguf)$/g, ""))
+      }
+      return name.includes(pattern)
+    })
+    if (selected.length === 0) {
+      console.log(`  No files matched "${opts.file}".`)
+      return
+    }
+  } else if (baseFiles.length === 1) {
+    selected = [baseFiles[0]!]
+  } else {
+    console.log()
+    for (let i = 0; i < baseFiles.length; i++) {
+      const f = baseFiles[i]!
+      const name = f.path.split("/").pop() ?? f.path
+      console.log(`  [${i + 1}] ${name} (${formatBytes(f.size)})`)
+    }
+    const choice = await prompt(`  Select file [1-${baseFiles.length}]: `)
+    const idx = parseInt(choice, 10) - 1
+    if (isNaN(idx) || idx < 0 || idx >= baseFiles.length) {
+      console.log("  Invalid selection.")
+      return
+    }
+    selected = [baseFiles[idx]!]
+  }
+
+  const downloadList = autoSelectMmproj(selected, files)
 
   console.log(`\n  Downloading ${downloadList.length} file(s)...`)
   await downloadFiles(
@@ -147,6 +177,16 @@ export async function pullGguf(
     token
   )
   console.log("\n  Done. Run `homestead discover` to register.")
+}
+
+function prompt(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close()
+      resolve(answer.trim())
+    })
+  })
 }
 
 function formatBytes(bytes: number): string {

@@ -260,7 +260,8 @@ export function registerCli(program: Command): void {
     .description("Download a model from HuggingFace, Ollama, or URL")
     .argument("<uri>", "Model URI (hf://org/model, ollama://model, or http URL)")
     .option("--list", "List GGUF files only (HF repos)")
-    .action(async (uri: string, opts: { list?: boolean }) => {
+    .option("--file <glob>", "Download files matching glob (HF repos)")
+    .action(async (uri: string, opts: { list?: boolean; file?: string }) => {
       if (uri.startsWith("ollama://")) {
         const modelName = uri.replace("ollama://", "")
         logger.log(`Pulling ${modelName} from Ollama...`)
@@ -274,7 +275,7 @@ export function registerCli(program: Command): void {
       } else if (uri.startsWith("hf://")) {
         const repo = uri.replace("hf://", "")
         const { pullGguf } = await import("../core/hf-download.js")
-        await pullGguf(repo, { listOnly: opts.list })
+        await pullGguf(repo, { listOnly: opts.list, file: opts.file })
       } else if (uri.startsWith("http")) {
         logger.log(`Downloading from ${uri}...`)
         const filename = uri.split("/").pop() || "model.gguf"
