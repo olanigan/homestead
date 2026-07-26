@@ -21,14 +21,14 @@ export function registerCli(program: Command): void {
   program
     .name("homestead")
     .description("Your Local AI Harness")
-    .version("0.0.2", "-v, --version", "Output the current version")
+    .version("0.0.3", "-v, --version", "Output the current version")
     .showHelpAfterError()
 
   program
     .command("version")
     .description("Show the version of Homestead")
     .action(() => {
-      logger.log("0.0.2")
+      logger.log("0.0.3")
     })
 
   program
