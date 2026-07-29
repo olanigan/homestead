@@ -9,16 +9,18 @@ export function createCompletionsRoutes(registry: Registry): Hono {
 
   app.post("/completions", async (c) => {
     const body = await c.req.json() as { model?: string; prompt?: string; stream?: boolean }
-    const modelName = body.model
+    const reqModelName = body.model
 
-    if (!modelName) {
+    if (!reqModelName) {
       return errorResponse(c, 400, "model field is required", "invalid_request_error", "model_not_found")
     }
 
-    const model = registry.get(modelName)
+    const model = registry.get(reqModelName)
     if (!model) {
-      return errorResponse(c, 400, `Model not found: ${modelName}`, "invalid_request_error", "model_not_found")
+      return errorResponse(c, 400, `Model not found: ${reqModelName}`, "invalid_request_error", "model_not_found")
     }
+
+    const engineBody = { ...body, model: model.name }
 
     const tags = (model.metadata?.tags as string[]) || []
     if (tags.includes("vocab")) {
@@ -39,7 +41,7 @@ export function createCompletionsRoutes(registry: Registry): Hono {
       try {
         const proc = await engine.serve(model, 8080)
         registry.updateStatus(model.id, "serving")
-        return proxyToEngine(proc.endpoint, "/completions", body)
+        return proxyToEngine(proc.endpoint, "/completions", engineBody)
       } catch (err) {
         return errorResponse(c, 503, `Failed to serve model: ${err}`, "server_error", "serve_failed")
       }
@@ -56,13 +58,13 @@ export function createCompletionsRoutes(registry: Registry): Hono {
         }
         const newProc = await engine.serve(model, 8080)
         registry.updateStatus(model.id, "serving")
-        return proxyToEngine(newProc.endpoint, "/completions", body)
+        return proxyToEngine(newProc.endpoint, "/completions", engineBody)
       } catch (err) {
         return errorResponse(c, 503, `Failed to serve model: ${err}`, "server_error", "serve_failed")
       }
     }
 
-    return proxyToEngine(proc.endpoint, "/completions", body)
+    return proxyToEngine(proc.endpoint, "/completions", engineBody)
   })
 
   return app
