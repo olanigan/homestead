@@ -21,14 +21,14 @@ export function registerCli(program: Command): void {
   program
     .name("homestead")
     .description("Your Local AI Harness")
-    .version("0.0.3", "-v, --version", "Output the current version")
+    .version("0.0.4", "-v, --version", "Output the current version")
     .showHelpAfterError()
 
   program
     .command("version")
     .description("Show the version of Homestead")
     .action(() => {
-      logger.log("0.0.3")
+      logger.log("0.0.4")
     })
 
   program
@@ -157,6 +157,17 @@ export function registerCli(program: Command): void {
           process.exit(1)
         }
       }
+      if (model.source === "hf-hub" && model.format === "gguf" && !/\.gguf$/i.test(model.path)) {
+        const { resolveHfGgufPath } = await import("../scanners/hf-hub.js")
+        const resolved = resolveHfGgufPath(model.path)
+        if (resolved && resolved !== model.path) {
+          model.path = resolved
+          model.updatedAt = new Date().toISOString()
+          registry.upsert(model)
+          logger.log(`Resolved HF cache path to snapshot .gguf`)
+        }
+      }
+
       const tags = (model.metadata?.tags as string[]) || []
       if (tags.includes("vocab")) {
         logger.error(`Cannot serve model "${name}": this is a vocabulary-only file, not a model with weights`)
@@ -205,19 +216,20 @@ export function registerCli(program: Command): void {
       }
       const processes = engineManager.getRunningProcesses().filter((p) => p.modelId === model.id)
       if (processes.length === 0) {
-        const syntheticProc: ServingProcess = {
-          modelId: model.id,
-          engineKind: engine.kind,
-          pid: 0,
-          port: model.metadata?.apiEndpoint
-            ? parseInt(new URL(model.metadata.apiEndpoint as string).port) || 11434
-            : model.engine === "ollama" ? 11434 : 8080,
-          endpoint: model.path,
-          startedAt: new Date().toISOString(),
+        if (engine.kind === "ollama") {
+          const syntheticProc: ServingProcess = {
+            modelId: model.id,
+            engineKind: engine.kind,
+            pid: 0,
+            port: 11434,
+            endpoint: model.path,
+            startedAt: new Date().toISOString(),
+          }
+          await engine.stop(syntheticProc)
+        } else {
+          logger.log(`No active server for ${name}; nothing to stop`)
         }
-        await engine.stop(syntheticProc)
         registry.updateStatus(model.id, "stopped")
-        logger.log(`Stopped ${name}`)
         return
       }
       for (const proc of processes) {

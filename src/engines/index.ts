@@ -6,6 +6,7 @@ import { join, resolve } from "node:path"
 import { createServer } from "node:net"
 import type { ModelRecord, EngineAdapter, ServingProcess, EngineStatus, StreamEvent, ChatOptions } from "../types.js"
 import { globalEmitter } from "../observability/emitter.js"
+import { addServer, removeServer, loadServers } from "../core/server-state.js"
 
 const runningProcesses = new Map<string, ServingProcess>()
 const PID_DIR = join(homedir(), ".homestead")
@@ -29,6 +30,16 @@ function resolveLlamaBin(): { bin: string; args: string[] } | null {
   return null
 }
 
+async function resolveModelPath(model: ModelRecord): Promise<string> {
+  if (model.format === "gguf" && model.source === "hf-hub" && !/\.gguf$/i.test(model.path)) {
+    try {
+      const { resolveHfGgufPath } = await import("../scanners/hf-hub.js")
+      return resolveHfGgufPath(model.path) ?? model.path
+    } catch {}
+  }
+  return model.path
+}
+
 function findFreePort(start = 18766, end = 18800): number {
   for (let port = start; port <= end; port++) {
     const server = createServer()
@@ -48,6 +59,7 @@ function findFreePort(start = 18766, end = 18800): number {
 }
 
 function pidAlive(pid: number): boolean {
+  if (!(pid > 0)) return false
   try {
     process.kill(pid, 0)
     return true
@@ -142,6 +154,7 @@ export class OllamaAdapter implements EngineAdapter {
         startedAt: new Date().toISOString(),
       }
       runningProcesses.set(model.id, sp)
+      addServer(sp)
 
       const active = globalEmitter.getDb().getActiveSessionByModel(model.id)
       const sessionId = active ? active.session_id : `ollama-${model.id}-${Date.now()}`
@@ -175,6 +188,7 @@ export class OllamaAdapter implements EngineAdapter {
       })
     } catch {}
     runningProcesses.delete(process.modelId)
+    removeServer(process.modelId)
     const existing = globalEmitter.getDb().getActiveSessionByModel(process.modelId)
     if (!existing) return
     globalEmitter.modelUnloaded(existing.session_id, process.modelId, process.modelId, this.kind, {
@@ -249,7 +263,7 @@ export class LlamaCppAdapter implements EngineAdapter {
     this._currentModel = model
     this.lastStderr = []
     this.port = port || findFreePort()
-    this.modelPath = resolve(model.path)
+    this.modelPath = resolve(await resolveModelPath(model))
 
     const resolved = resolveLlamaBin()
     this.resolved = resolved ?? this.resolved
@@ -289,6 +303,7 @@ export class LlamaCppAdapter implements EngineAdapter {
       startedAt: new Date().toISOString(),
     }
     runningProcesses.set(model.id, sp)
+    addServer(sp)
 
     globalEmitter.modelLoaded(sessionId, model.id, model.name, this.kind, {
       endpoint: sp.endpoint,
@@ -311,6 +326,7 @@ export class LlamaCppAdapter implements EngineAdapter {
 
     this.process.on("exit", () => {
       runningProcesses.delete(model.id)
+      removeServer(model.id)
       globalEmitter.modelUnloaded(sessionId, model.id, model.name, this.kind, {
         reason: "process_exit",
         duration_sec: (Date.now() - new Date(sp.startedAt).getTime()) / 1000,
@@ -324,22 +340,28 @@ export class LlamaCppAdapter implements EngineAdapter {
   async stop(sp: ServingProcess): Promise<void> {
     this.stopWatchdog()
     const proc = this.process
-    if (!proc) {
+    if (proc) {
+      this.process = null
+      try { process.kill(proc.pid!, "SIGTERM") } catch {}
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline && proc.exitCode === null) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      if (proc.exitCode === null) {
+        try { process.kill(proc.pid!, "SIGKILL") } catch {}
+      }
+    } else if (sp.pid > 0) {
       try { process.kill(sp.pid, "SIGTERM") } catch {}
-      runningProcesses.delete(sp.modelId)
-      return
-    }
-    this.process = null
-
-    try { process.kill(proc.pid!, "SIGTERM") } catch {}
-    const deadline = Date.now() + 5_000
-    while (Date.now() < deadline && proc.exitCode === null) {
-      await new Promise((r) => setTimeout(r, 100))
-    }
-    if (proc.exitCode === null) {
-      try { process.kill(proc.pid!, "SIGKILL") } catch {}
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline && pidAlive(sp.pid)) {
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      if (pidAlive(sp.pid)) {
+        try { process.kill(sp.pid, "SIGKILL") } catch {}
+      }
     }
     clearPidFile()
+    removeServer(sp.modelId)
     runningProcesses.delete(sp.modelId)
     const sessionId = `llamacpp-${sp.modelId}-${new Date(sp.startedAt).getTime()}`
     globalEmitter.modelUnloaded(sessionId, sp.modelId, sp.modelId, this.kind, {
@@ -537,7 +559,10 @@ export class EngineManager {
   }
 
   getRunningProcesses(): ServingProcess[] {
-    return Array.from(runningProcesses.values())
+    const memory = Array.from(runningProcesses.values())
+    const memoryIds = new Set(memory.map((p) => p.modelId))
+    const persisted = loadServers().filter((p) => !memoryIds.has(p.modelId))
+    return [...memory, ...persisted]
   }
 }
 

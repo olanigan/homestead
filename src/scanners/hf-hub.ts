@@ -1,4 +1,4 @@
-import { readdirSync, statSync, existsSync } from "node:fs"
+import { readdirSync, statSync, existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ModelRecord } from "../types.js"
@@ -151,6 +151,53 @@ function getGgufFiles(ref: HfModelRef): Array<{ path: string }> {
     }
   }
   return results
+}
+
+/**
+ * Resolve the actual .gguf file inside an HF hub cache model directory.
+ *
+ * The HF hub cache stores model files under snapshots/<hash>/ as symlinks to
+ * blobs/<hash>, with refs/main pointing at the current snapshot hash. Passing
+ * the bare repo directory (models--org--name) to llama-server fails with a
+ * GGUF magic-number error; it needs the resolved .gguf file.
+ *
+ * Priority:
+ *   1. Canonical snapshot target from refs/main (falling back to refs/master).
+ *   2. First snapshot directory containing a non-mmproj .gguf.
+ * Returns null when nothing resolvable is found.
+ */
+export function resolveHfGgufPath(modelDir: string): string | null {
+  if (!existsSync(modelDir)) return null
+
+  const pickFromSnapshot = (snapDir: string): string | null => {
+    const ggufFiles = walkDir(snapDir).filter(
+      (f) => f.name.toLowerCase().endsWith(".gguf") && !f.path.includes("mmproj")
+    )
+    return ggufFiles[0]?.path ?? null
+  }
+
+  const refsDir = join(modelDir, "refs")
+  if (existsSync(refsDir)) {
+    for (const refName of ["main", "master"]) {
+      try {
+        const target = readFileSync(join(refsDir, refName), "utf8").trim()
+        if (!target) continue
+        const found = pickFromSnapshot(join(modelDir, "snapshots", target))
+        if (found) return found
+      } catch {}
+    }
+  }
+
+  const snapshotsDir = join(modelDir, "snapshots")
+  if (existsSync(snapshotsDir)) {
+    for (const snap of readdirSync(snapshotsDir)) {
+      if (snap === ".no_exist") continue
+      const found = pickFromSnapshot(join(snapshotsDir, snap))
+      if (found) return found
+    }
+  }
+
+  return null
 }
 
 export async function scanHfHub(): Promise<ModelRecord[]> {
