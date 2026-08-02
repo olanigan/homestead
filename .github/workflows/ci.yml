@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: quality
     env:
-      CI_MODEL_PATH: ${{ github.workspace }}/.ci/models/${{ env.MODEL_FILE }}
+      CI_MODEL_PATH: ${{ github.workspace }}/.ci/models/LFM2-350M-Q4_K_M.gguf
       CI_EVAL_OUT: ${{ github.workspace }}/.ci/eval-results.jsonl
     steps:
       - uses: actions/checkout@v4
