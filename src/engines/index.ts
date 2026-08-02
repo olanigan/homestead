@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
 import { createServer } from "node:net"
-import type { ModelRecord, EngineAdapter, ServingProcess, EngineStatus, StreamEvent, ChatOptions } from "../types.js"
+import type { ModelRecord, EngineAdapter, ServingProcess, EngineStatus, StreamEvent, ChatOptions, ServeOptions } from "../types.js"
 import { globalEmitter } from "../observability/emitter.js"
 import { addServer, removeServer, loadServers } from "../core/server-state.js"
 
@@ -122,7 +122,7 @@ export class OllamaAdapter implements EngineAdapter {
     return model.engine === "ollama" || model.source === "ollama"
   }
 
-  async serve(model: ModelRecord, _port: number): Promise<ServingProcess> {
+  async serve(model: ModelRecord, _port: number, _opts?: ServeOptions): Promise<ServingProcess> {
     const existing = runningProcesses.get(model.id)
     if (existing) return existing
 
@@ -247,7 +247,7 @@ export class LlamaCppAdapter implements EngineAdapter {
     return model.format === "gguf" && model.source !== "ollama"
   }
 
-  async serve(model: ModelRecord, port: number): Promise<ServingProcess> {
+  async serve(model: ModelRecord, port: number, opts?: ServeOptions): Promise<ServingProcess> {
     const existing = runningProcesses.get(model.id)
     if (existing) return existing
 
@@ -281,7 +281,8 @@ export class LlamaCppAdapter implements EngineAdapter {
     const ngl = model.quantization ? parseInt(model.quantization.replace(/[^0-9]/g, "")) || 99 : 99
     argv.push("-ngl", String(ngl))
 
-    this.process = spawn(this.resolved.bin, argv, { stdio: "pipe" })
+    this.process = spawn(this.resolved.bin, argv, opts?.detach ? { stdio: "ignore", detached: true } : { stdio: "pipe" })
+    if (opts?.detach) this.process.unref()
     writePidFile(this.process.pid ?? 0)
 
     this.tailStderr(this.process)

@@ -130,7 +130,8 @@ export function registerCli(program: Command): void {
     .description("Start serving a model")
     .argument("<name>", "Model name or ID")
     .option("-p, --port <port>", "Port to serve on", "8080")
-    .action(async (name: string, opts: { port: string }) => {
+    .option("-d, --detach", "Detach after the server is healthy and exit the CLI")
+    .action(async (name: string, opts: { port: string; detach?: boolean }) => {
       let model = registry.get(name)
       if (!model) {
         if (existsSync(name)) {
@@ -189,10 +190,14 @@ export function registerCli(program: Command): void {
       }
       logger.log(`Starting ${model.name} via ${engine.name} on port ${opts.port}...`)
       try {
-        const proc = await engine.serve(model, parseInt(opts.port))
+        const proc = await engine.serve(model, parseInt(opts.port), { detach: opts.detach })
         registry.updateStatus(model.id, "serving")
         logger.log(`  Serving at ${proc.endpoint}`)
         logger.log(`  PID: ${proc.pid}`)
+        if (opts.detach) {
+          logger.log(`  Detached. Use 'homestead stop ${name}' to stop.`)
+          process.exit(0)
+        }
       } catch (err) {
         logger.error(`Failed to serve model: ${err}`)
         process.exit(1)

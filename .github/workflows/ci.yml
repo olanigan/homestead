@@ -12,6 +12,7 @@ concurrency:
 
 env:
   BUN_VERSION: 1.3.14
+  LLAMA_VERSION: b10217
   MODEL_REPO: LiquidAI/LFM2-350M-GGUF
   MODEL_FILE: LFM2-350M-Q4_K_M.gguf
 
@@ -20,13 +21,13 @@ jobs:
     name: Quality (typecheck, lint, unit, build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -66,14 +67,14 @@ jobs:
       CI_MODEL_PATH: ${{ github.workspace }}/.ci/models/LFM2-350M-Q4_K_M.gguf
       CI_EVAL_OUT: ${{ github.workspace }}/.ci/eval-results.jsonl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Restore model cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: model-cache
         with:
           path: .ci/models
@@ -89,7 +90,7 @@ jobs:
 
       - name: Install llama.cpp (CPU build)
         run: |
-          SKIP_CUDA=1 SKIP_ROCM=1 SKIP_VULKAN=1 curl -LsSf https://llama.app/install.sh | sh
+          SKIP_CUDA=1 SKIP_ROCM=1 SKIP_VULKAN=1 LLAMA_VERSION=${{ env.LLAMA_VERSION }} curl -LsSf https://llama.app/install.sh | sh
           ~/.local/bin/llama version
 
       - name: Install dependencies
@@ -103,7 +104,7 @@ jobs:
 
       - name: Upload eval artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: eval-results
           path: .ci/eval-results.jsonl
