@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.3.14
+  MODEL_REPO: LiquidAI/LFM2-350M-GGUF
+  MODEL_FILE: LFM2-350M-Q4_K_M.gguf
+
+jobs:
+  quality:
+    name: Quality (typecheck, lint, unit, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/ui/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests
+        run: bun run test:unit
+
+      - name: Build frontend
+        run: |
+          cd src/ui/frontend
+          npm ci
+          npm run build
+
+      - name: Build TypeScript (dist)
+        run: bun run build:ts
+
+      - name: CLI smoke test
+        run: |
+          bun dist/homestead.js version
+          bun dist/homestead.js list --json
+
+  serve-e2e:
+    name: Serve + eval (LFM2-350M on CPU)
+    runs-on: ubuntu-latest
+    needs: quality
+    env:
+      CI_MODEL_PATH: ${{ github.workspace }}/.ci/models/${{ env.MODEL_FILE }}
+      CI_EVAL_OUT: ${{ github.workspace }}/.ci/eval-results.jsonl
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Restore model cache
+        uses: actions/cache@v4
+        id: model-cache
+        with:
+          path: .ci/models
+          key: ${{ env.MODEL_REPO }}-${{ env.MODEL_FILE }}-v1
+
+      - name: Download test model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .ci/models
+          curl -L --fail --retry 3 -o .ci/models/${{ env.MODEL_FILE }} \
+            https://huggingface.co/${{ env.MODEL_REPO }}/resolve/main/${{ env.MODEL_FILE }}
+          test -s .ci/models/${{ env.MODEL_FILE }}
+
+      - name: Install llama.cpp (CPU build)
+        run: |
+          SKIP_CUDA=1 SKIP_ROCM=1 SKIP_VULKAN=1 curl -LsSf https://llama.app/install.sh | sh
+          ~/.local/bin/llama version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build TypeScript (dist)
+        run: bun run build:ts
+
+      - name: Serve + eval e2e tests
+        run: bun run test:e2e
+
+      - name: Upload eval artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: .ci/eval-results.jsonl
+          if-no-files-found: ignore
