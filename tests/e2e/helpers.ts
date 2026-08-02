@@ -28,8 +28,15 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 export function resolveModelPath(): string | null {
   const fromEnv = process.env.CI_MODEL_PATH
   if (fromEnv && existsSync(fromEnv)) return resolve(fromEnv)
-  const local = resolve(import.meta.dir, "../../.ci/models/LFM2-350M-Q4_K_M.gguf")
+  const local = resolve(import.meta.dir, "../../.ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf")
   return existsSync(local) ? local : null
+}
+
+/** Basename of the resolved test model, without its extension (e.g. `SmolLM2-135M-Instruct-Q3_K_M`). */
+export function resolveModelName(): string {
+  const path = resolveModelPath()
+  if (!path) return "model"
+  return path.split("/").pop()?.replace(/\.\w+$/, "") || "model"
 }
 
 /** Run the homestead CLI to completion. */

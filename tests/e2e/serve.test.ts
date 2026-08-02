@@ -1,9 +1,10 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test"
-import { mkdtempSync, mkdirSync, rmSync, linkSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { mkdtempSync, mkdirSync, rmSync, linkSync, writeFileSync, readdirSync } from "node:fs"
+import { tmpdir, homedir } from "node:os"
 import { join, resolve } from "node:path"
 import {
   resolveModelPath,
+  resolveModelName,
   runCli,
   startCli,
   type RunningCli,
@@ -13,6 +14,7 @@ import {
 } from "./helpers.js"
 
 const MODEL_PATH = resolveModelPath()
+const MODEL_NAME = resolveModelName()
 const noModel = MODEL_PATH === null
 
 const EVAL_TASKS = [
@@ -88,7 +90,23 @@ async function stopServer(): Promise<void> {
   serveProc = null
 }
 
-describe.skipIf(noModel)("homestead serve e2e (LFM2-350M)", () => {
+describe("homestead pull (hf://)", () => {
+  const repo = process.env.CI_PULL_REPO
+  const file = process.env.CI_PULL_FILE
+
+  test("downloads the selected GGUF into the HF cache", async () => {
+    if (!repo || !file) return
+    const res = await runCli(["pull", `hf://${repo}`, "--file", file], { timeoutMs: 180_000 })
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain("Downloading")
+
+    const cacheDir = join(homedir(), ".cache", "huggingface", "hub")
+    const entries = readdirSync(cacheDir, { recursive: true })
+    expect(entries.some((p) => String(p).endsWith(file))).toBe(true)
+  })
+})
+
+describe.skipIf(noModel)(`homestead serve e2e (${MODEL_NAME})`, () => {
   beforeAll(startServer)
   afterAll(async () => {
     await stopServer()
@@ -239,7 +257,7 @@ describe.skipIf(noModel)("homestead discover (gguf-file scanner)", () => {
     const homeDir = mkdtempSync(join(tmpdir(), "homestead-home-"))
     const modelsDir = join(homeDir, "models")
     mkdirSync(modelsDir, { recursive: true })
-    linkSync(MODEL_PATH, join(modelsDir, "LFM2-350M-Q4_K_M.gguf"))
+    linkSync(MODEL_PATH, join(modelsDir, `${MODEL_NAME}.gguf`))
     const dbPath = join(homeDir, "discover.db")
     try {
       const res = await runCli(["discover", "--json"], {
@@ -252,7 +270,7 @@ describe.skipIf(noModel)("homestead discover (gguf-file scanner)", () => {
       })
       expect(res.code).toBe(0)
       const data = JSON.parse(res.stdout) as { models: Array<{ source: string; name: string }> }
-      const found = data.models.some((m) => m.source === "gguf-file" && m.name === "LFM2-350M-Q4_K_M")
+      const found = data.models.some((m) => m.source === "gguf-file" && m.name === MODEL_NAME)
       expect(found).toBe(true)
     } finally {
       rmSync(homeDir, { recursive: true, force: true })
