@@ -37,7 +37,7 @@ export async function scanOllama(): Promise<ModelRecord[]> {
       const tags: string[] = isCloud ? ["cloud"] : ["weights"]
 
       models.push({
-        id: `ollama-${m.name.replace(/[:\/]/g, "-")}`,
+        id: `ollama-${m.name.replace(/[:/]/g, "-")}`,
         name: m.name,
         source: "ollama",
         sourceId: m.digest,

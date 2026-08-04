@@ -48,6 +48,8 @@ export class Registry {
     mkdirSync(dataDir, { recursive: true })
     const path = dbPath || process.env.HOMESTEAD_DB_PATH || process.env.LAI_DB_PATH || join(dataDir, "models.db")
     this.db = new Database(path)
+    this.db.run("PRAGMA busy_timeout = 5000")
+    try { this.db.run("PRAGMA journal_mode = WAL") } catch { /* best effort — WAL may fail under concurrent access */ }
 
     this.db.run(`CREATE TABLE IF NOT EXISTS models (
       id TEXT PRIMARY KEY,

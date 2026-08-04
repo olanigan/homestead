@@ -24,12 +24,16 @@ export interface ModelRecord {
   updatedAt: string
 }
 
+export interface ServeOptions {
+  detach?: boolean
+}
+
 export interface EngineAdapter {
   kind: EngineKind
   name: string
   priority: number
   canHandle(model: ModelRecord): boolean
-  serve(model: ModelRecord, port: number): Promise<ServingProcess>
+  serve(model: ModelRecord, port: number, opts?: ServeOptions): Promise<ServingProcess>
   stop(process: ServingProcess): Promise<void>
   status(): Promise<EngineStatus>
   discover(): Promise<ModelRecord[]>

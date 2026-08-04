@@ -1,6 +1,6 @@
 {
   "name": "homestead-ai",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Your Local AI Harness",
   "author": "Ibrahim Olanigan",
   "type": "module",
@@ -24,10 +24,14 @@
   "scripts": {
     "build": "npm run build:ui && tsc",
     "build:ui": "cd src/ui/frontend && npm run build",
+    "build:ts": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/homestead.js",
+    "start": "bun dist/homestead.js",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint 'src/**/*.ts'"
+    "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
+    "test": "bun test --timeout 120000",
+    "test:unit": "bun test --timeout 120000 tests/unit",
+    "test:e2e": "bun test --timeout 120000 tests/e2e"
   },
   "dependencies": {
     "@huggingface/hub": "^2.13.3",
@@ -36,9 +40,12 @@
     "zod": "^3.24.4"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/bun": "^1.2.9",
     "@types/node": "^25.9.3",
-    "typescript": "^5.8.3"
+    "eslint": "^10.8.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.65.0"
   },
   "engines": {
     "bun": ">=1.2"

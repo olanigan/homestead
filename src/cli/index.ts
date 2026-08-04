@@ -21,14 +21,14 @@ export function registerCli(program: Command): void {
   program
     .name("homestead")
     .description("Your Local AI Harness")
-    .version("0.0.3", "-v, --version", "Output the current version")
+    .version("0.0.4", "-v, --version", "Output the current version")
     .showHelpAfterError()
 
   program
     .command("version")
     .description("Show the version of Homestead")
     .action(() => {
-      logger.log("0.0.3")
+      logger.log("0.0.4")
     })
 
   program
@@ -130,7 +130,8 @@ export function registerCli(program: Command): void {
     .description("Start serving a model")
     .argument("<name>", "Model name or ID")
     .option("-p, --port <port>", "Port to serve on", "8080")
-    .action(async (name: string, opts: { port: string }) => {
+    .option("-d, --detach", "Detach after the server is healthy and exit the CLI")
+    .action(async (name: string, opts: { port: string; detach?: boolean }) => {
       let model = registry.get(name)
       if (!model) {
         if (existsSync(name)) {
@@ -157,6 +158,17 @@ export function registerCli(program: Command): void {
           process.exit(1)
         }
       }
+      if (model.source === "hf-hub" && model.format === "gguf" && !/\.gguf$/i.test(model.path)) {
+        const { resolveHfGgufPath } = await import("../scanners/hf-hub.js")
+        const resolved = resolveHfGgufPath(model.path)
+        if (resolved && resolved !== model.path) {
+          model.path = resolved
+          model.updatedAt = new Date().toISOString()
+          registry.upsert(model)
+          logger.log(`Resolved HF cache path to snapshot .gguf`)
+        }
+      }
+
       const tags = (model.metadata?.tags as string[]) || []
       if (tags.includes("vocab")) {
         logger.error(`Cannot serve model "${name}": this is a vocabulary-only file, not a model with weights`)
@@ -178,10 +190,14 @@ export function registerCli(program: Command): void {
       }
       logger.log(`Starting ${model.name} via ${engine.name} on port ${opts.port}...`)
       try {
-        const proc = await engine.serve(model, parseInt(opts.port))
+        const proc = await engine.serve(model, parseInt(opts.port), { detach: opts.detach })
         registry.updateStatus(model.id, "serving")
         logger.log(`  Serving at ${proc.endpoint}`)
         logger.log(`  PID: ${proc.pid}`)
+        if (opts.detach) {
+          logger.log(`  Detached. Use 'homestead stop ${name}' to stop.`)
+          process.exit(0)
+        }
       } catch (err) {
         logger.error(`Failed to serve model: ${err}`)
         process.exit(1)
@@ -205,19 +221,20 @@ export function registerCli(program: Command): void {
       }
       const processes = engineManager.getRunningProcesses().filter((p) => p.modelId === model.id)
       if (processes.length === 0) {
-        const syntheticProc: ServingProcess = {
-          modelId: model.id,
-          engineKind: engine.kind,
-          pid: 0,
-          port: model.metadata?.apiEndpoint
-            ? parseInt(new URL(model.metadata.apiEndpoint as string).port) || 11434
-            : model.engine === "ollama" ? 11434 : 8080,
-          endpoint: model.path,
-          startedAt: new Date().toISOString(),
+        if (engine.kind === "ollama") {
+          const syntheticProc: ServingProcess = {
+            modelId: model.id,
+            engineKind: engine.kind,
+            pid: 0,
+            port: 11434,
+            endpoint: model.path,
+            startedAt: new Date().toISOString(),
+          }
+          await engine.stop(syntheticProc)
+        } else {
+          logger.log(`No active server for ${name}; nothing to stop`)
         }
-        await engine.stop(syntheticProc)
         registry.updateStatus(model.id, "stopped")
-        logger.log(`Stopped ${name}`)
         return
       }
       for (const proc of processes) {

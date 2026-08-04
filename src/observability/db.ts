@@ -87,28 +87,32 @@ export class ObsDb {
   }
 
   upsertSession(session: ServingSession): void {
-    const q = this.db.query(`
-      INSERT INTO sessions
-        (session_id, model_id, model_name, engine_kind, pool, tags_json, first_ts, last_ts, event_count, status)
-      VALUES
-        ($session_id, $model_id, $model_name, $engine_kind, $pool, $tags_json, $first_ts, $last_ts, $event_count, $status)
-      ON CONFLICT(session_id) DO UPDATE SET
-        last_ts = excluded.last_ts,
-        event_count = excluded.event_count,
-        status = excluded.status
-    `)
-    q.run({
-      $session_id: session.session_id,
-      $model_id: session.model_id,
-      $model_name: session.model_name,
-      $engine_kind: session.engine_kind,
-      $pool: session.pool,
-      $tags_json: JSON.stringify(session.tags),
-      $first_ts: session.first_ts,
-      $last_ts: session.last_ts,
-      $event_count: session.event_count,
-      $status: session.status,
-    })
+    try {
+      const q = this.db.query(`
+        INSERT INTO sessions
+          (session_id, model_id, model_name, engine_kind, pool, tags_json, first_ts, last_ts, event_count, status)
+        VALUES
+          ($session_id, $model_id, $model_name, $engine_kind, $pool, $tags_json, $first_ts, $last_ts, $event_count, $status)
+        ON CONFLICT(session_id) DO UPDATE SET
+          last_ts = excluded.last_ts,
+          event_count = excluded.event_count,
+          status = excluded.status
+      `)
+      q.run({
+        $session_id: session.session_id,
+        $model_id: session.model_id,
+        $model_name: session.model_name,
+        $engine_kind: session.engine_kind,
+        $pool: session.pool,
+        $tags_json: JSON.stringify(session.tags),
+        $first_ts: session.first_ts,
+        $last_ts: session.last_ts,
+        $event_count: session.event_count,
+        $status: session.status,
+      })
+    } catch {
+      // best effort — a locked/read-only db must never break serving operations
+    }
   }
 
   getActiveSessionByModel(modelId: string): ServingSession | null {

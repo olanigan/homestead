@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.3.14
+  LLAMA_VERSION: b10217
+  MODEL_REPO: bartowski/SmolLM2-135M-Instruct-GGUF
+  MODEL_FILE: SmolLM2-135M-Instruct-Q3_K_M.gguf
+
+jobs:
+  quality:
+    name: Quality (typecheck, lint, unit, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/ui/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests
+        run: bun run test:unit
+
+      - name: Build frontend
+        run: |
+          cd src/ui/frontend
+          npm ci
+          npm run build
+
+      - name: Build TypeScript (dist)
+        run: bun run build:ts
+
+      - name: CLI smoke test
+        run: |
+          bun dist/homestead.js version
+          bun dist/homestead.js list --json
+
+  serve-e2e:
+    name: Serve + eval (SmolLM2-135M on CPU)
+    runs-on: ubuntu-latest
+    needs: quality
+    env:
+      CI_MODEL_PATH: ${{ github.workspace }}/.ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf
+      CI_EVAL_OUT: ${{ github.workspace }}/.ci/eval-results.jsonl
+      CI_PULL_REPO: bartowski/SmolLM2-135M-Instruct-GGUF
+      CI_PULL_FILE: SmolLM2-135M-Instruct-Q3_K_M.gguf
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Restore model cache
+        uses: actions/cache@v5
+        id: model-cache
+        with:
+          path: .ci/models
+          key: ${{ env.MODEL_REPO }}-${{ env.MODEL_FILE }}-v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build TypeScript (dist)
+        run: bun run build:ts
+
+      - name: Download test model (homestead pull)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          bun dist/homestead.js pull hf://${{ env.MODEL_REPO }} --file ${{ env.MODEL_FILE }}
+          mkdir -p .ci/models
+          MODEL_SRC=$(find ~/.cache/huggingface/hub -name "${{ env.MODEL_FILE }}" | head -1)
+          test -n "$MODEL_SRC"
+          cp -L "$MODEL_SRC" .ci/models/${{ env.MODEL_FILE }}
+          test -s .ci/models/${{ env.MODEL_FILE }}
+
+      - name: Install llama.cpp (CPU build)
+        run: |
+          SKIP_CUDA=1 SKIP_ROCM=1 SKIP_VULKAN=1 LLAMA_VERSION=${{ env.LLAMA_VERSION }} curl -LsSf https://llama.app/install.sh | sh
+          ~/.local/bin/llama version
+
+      - name: Serve + eval e2e tests
+        run: bun run test:e2e
+
+      - name: Upload eval artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: eval-results
+          path: .ci/eval-results.jsonl
+          if-no-files-found: ignore
