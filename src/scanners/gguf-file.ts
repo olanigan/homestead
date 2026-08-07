@@ -2,7 +2,7 @@ import { readdirSync, existsSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ModelRecord } from "../types.js"
-import { readGgufHeader } from "../core/gguf.js"
+import { readGgufHeader, readGgufMetadata } from "../core/gguf.js"
 
 interface SearchPath {
   path: string
@@ -74,6 +74,7 @@ export async function scanGgufFiles(): Promise<ModelRecord[]> {
       if (isVocab) continue
 
       const tags: string[] = ["weights"]
+      const meta = readGgufMetadata(filepath)
 
       models.push({
         id,
@@ -86,7 +87,15 @@ export async function scanGgufFiles(): Promise<ModelRecord[]> {
         quantization: detectQuantFromPath(filepath),
         engine: "llama.cpp",
         status: "discovered",
-        metadata: { filepath, searchSource: sp.source, tags },
+        metadata: {
+          filepath,
+          searchSource: sp.source,
+          tags,
+          ...(meta?.context_length != null && { context_length: meta.context_length }),
+          ...(meta?.architecture != null && { architecture: meta.architecture }),
+          ...(meta?.file_type != null && { file_type: meta.file_type }),
+          ...(meta?.name != null && { gguf_name: meta.name }),
+        },
         discoveredAt: now,
         updatedAt: now,
       })

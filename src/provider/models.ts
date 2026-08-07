@@ -25,6 +25,8 @@ function toOpenAIModel(model: ModelRecord) {
       status: model.status,
       context_length: (model.metadata?.context_length as number) ?? null,
       parameter_count: (model.metadata?.parameter_count as string) ?? null,
+      architecture: (model.metadata?.architecture as string) ?? null,
+      file_type: (model.metadata?.file_type as number) ?? null,
     },
   }
 }

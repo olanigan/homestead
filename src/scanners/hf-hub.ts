@@ -2,7 +2,7 @@ import { readdirSync, statSync, existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ModelRecord } from "../types.js"
-import { readGgufHeader } from "../core/gguf.js"
+import { readGgufHeader, readGgufMetadata } from "../core/gguf.js"
 
 interface HfModelRef {
   org: string
@@ -244,6 +244,17 @@ export async function scanHfHub(): Promise<ModelRecord[]> {
         isComplete: ref.isComplete,
         fileCount: ref.fileCount,
         tags,
+        ...(() => {
+          if (ref.detectedFormat !== "gguf" || !modelPath) return {}
+          const meta = readGgufMetadata(modelPath)
+          if (!meta) return {}
+          return {
+            ...(meta.context_length != null && { context_length: meta.context_length }),
+            ...(meta.architecture != null && { architecture: meta.architecture }),
+            ...(meta.file_type != null && { file_type: meta.file_type }),
+            ...(meta.name != null && { gguf_name: meta.name }),
+          }
+        })(),
       },
       discoveredAt: now,
       updatedAt: now,
