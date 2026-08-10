@@ -381,6 +381,36 @@ export function registerCli(program: Command): void {
       const { serveUi } = await import("../ui/server.js")
       await serveUi(parseInt(opts.port), registry)
     })
+
+  const providerCmd = program
+    .command("provider")
+    .description("Manage Homestead as a model provider for external tools")
+
+  providerCmd
+    .command("start")
+    .description("Start the provider API server and print integration instructions")
+    .option("-p, --port <port>", "Port for the provider API", "3030")
+    .action(async (opts: { port: string }) => {
+      const port = parseInt(opts.port)
+      logger.log(`\n  Starting Homestead provider API on http://localhost:${port}/v1...`)
+      logger.log(`  API:    http://localhost:${port}/v1`)
+      logger.log(`  Health: http://localhost:${port}/v1/health`)
+      logger.log(`  Models: http://localhost:${port}/v1/models\n`)
+      const extPath = new URL("../../pi-extension", import.meta.url).pathname
+      logger.log(`  Pi integration:`)
+      logger.log(`    cp -r ${extPath} ~/.pi/agent/extensions/homestead`)
+      logger.log(`    # Then restart Pi to pick up the extension\n`)
+      const { serveUi } = await import("../ui/server.js")
+      await serveUi(port, registry)
+    })
+
+  providerCmd
+    .command("extension-path")
+    .description("Print the path to the Pi extension directory")
+    .action(() => {
+      const extPath = new URL("../../pi-extension", import.meta.url).pathname
+      logger.log(extPath)
+    })
 }
 
 function formatBytes(bytes: number): string {

@@ -6,12 +6,15 @@ import type { Registry } from "../core/registry.js"
 import { discoverAll } from "../core/scanner.js"
 import { engineManager } from "../engines/index.js"
 import { globalEmitter } from "../observability/emitter.js"
+import { createProviderApp } from "../provider/homestead.js"
 
 export async function serveUi(
   port: number,
   registry: Registry,
 ): Promise<void> {
   const app = new Hono()
+
+  app.route("/v1", createProviderApp(registry))
   const uiDir = join(import.meta.dir, "../../dist/ui")
 
   app.get("/api/models", (c) => {
@@ -129,6 +132,7 @@ export async function serveUi(
 
   console.log(`  UI: http://localhost:${port}`)
   console.log(`  API: http://localhost:${port}/api/`)
+  console.log(`  Provider: http://localhost:${port}/v1/`)
 
   process.on("SIGINT", () => {
     server.stop()
