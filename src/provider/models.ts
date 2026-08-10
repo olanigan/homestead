@@ -1,12 +1,14 @@
 import { Hono } from "hono"
 import type { Registry } from "../core/registry.js"
 import type { ModelRecord } from "../types.js"
+import { engineManager } from "../engines/index.js"
 
-function isServable(model: ModelRecord): boolean {
+export function isServable(model: ModelRecord): boolean {
   if (model.status === "incomplete") return false
   const tags = (model.metadata?.tags as string[]) || []
   if (tags.includes("vocab")) return false
   if (tags.includes("cloud")) return false
+  if (!engineManager.selectEngine(model)) return false
   return true
 }
 
