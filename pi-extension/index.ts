@@ -58,6 +58,7 @@ export default async function (pi: ExtensionAPI) {
       name: "Homestead (local)",
       baseUrl: BASE_URL,
       api: "openai-completions",
+      apiKey: "homestead",
       headers: { "X-Homestead-Client": "pi" },
       models: toProviderModels(models),
     })
@@ -70,6 +71,7 @@ export default async function (pi: ExtensionAPI) {
         name: "Homestead (local)",
         baseUrl: BASE_URL,
         api: "openai-completions",
+        apiKey: "homestead",
         headers: { "X-Homestead-Client": "pi" },
         models: toProviderModels(refreshed),
       })
