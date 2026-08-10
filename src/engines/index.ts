@@ -12,6 +12,20 @@ const runningProcesses = new Map<string, ServingProcess>()
 const PID_DIR = join(homedir(), ".homestead")
 const PID_FILE = join(PID_DIR, "llama-server.pid")
 
+// Fallback when a model has no discovered context_length.
+const DEFAULT_CTX_SIZE = 4096
+// Upper bound so a model reporting a huge native window (e.g. 262144, 1048576)
+// doesn't blow up KV-cache memory on typical local hardware.
+const MAX_CTX_SIZE = 32768
+
+export function resolveCtxSize(model: ModelRecord): number {
+  const metaCtx = model.metadata?.context_length
+  if (typeof metaCtx === "number" && metaCtx > 0) {
+    return Math.min(metaCtx, MAX_CTX_SIZE)
+  }
+  return DEFAULT_CTX_SIZE
+}
+
 function resolveLlamaBin(): { bin: string; args: string[] } | null {
   for (const name of ["llama", "llama-server"]) {
     try {
@@ -273,7 +287,7 @@ export class LlamaCppAdapter implements EngineAdapter {
       "--model", this.modelPath,
       "--host", this.host,
       "--port", String(this.port),
-      "--ctx-size", "4096",
+      "--ctx-size", String(resolveCtxSize(model)),
       "--jinja",
       "--no-webui",
     ]
