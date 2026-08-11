@@ -128,6 +128,13 @@ export async function serveUi(
   const server = serve({
     fetch: app.fetch,
     port,
+    // Bun's default idleTimeout is 10s. Local model auto-serve (cold-loading
+    // a multi-GB GGUF on CPU) and long generations routinely exceed that,
+    // which kills the connection mid-request and surfaces to clients (e.g.
+    // Pi) as a generic "Connection error." with no indication why. This is
+    // a localhost dev tool, not a public-facing server, so disable the
+    // idle timeout rather than picking another arbitrary ceiling.
+    idleTimeout: 0,
   })
 
   console.log(`  UI: http://localhost:${port}`)
