@@ -31,7 +31,8 @@
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
     "test": "bun test --timeout 120000",
     "test:unit": "bun test --timeout 120000 tests/unit",
-    "test:e2e": "bun test --timeout 120000 tests/e2e"
+    "test:e2e": "bun test --timeout 120000 tests/e2e",
+    "test:mutation": "stryker run"
   },
   "dependencies": {
     "@huggingface/hub": "^2.13.3",
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@stryker-mutator/core": "^9.6.1",
     "@types/bun": "^1.2.9",
     "@types/node": "^25.9.3",
     "eslint": "^10.8.0",
