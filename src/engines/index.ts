@@ -10,7 +10,15 @@ import { addServer, removeServer, loadServers } from "../core/server-state.js"
 
 const runningProcesses = new Map<string, ServingProcess>()
 const PID_DIR = join(homedir(), ".homestead")
-const PID_FILE = join(PID_DIR, "llama-server.pid")
+
+// PID files are keyed per model.id, not a single shared file — a shared file cannot
+// distinguish "stale PID from a crashed session" from "a different model that is still
+// legitimately serving," so cleaning it up before starting a second concurrent model would
+// kill the first model's live process. See epic-002-foundation.yaml:story-212.
+function pidFilePathFor(modelId: string): string {
+  const safe = modelId.replace(/[^a-zA-Z0-9._-]/g, "_")
+  return join(PID_DIR, `llama-server-${safe}.pid`)
+}
 
 // Fallback when a model has no discovered context_length.
 const DEFAULT_CTX_SIZE = 4096
@@ -91,23 +99,27 @@ function processNameMatches(pid: number, needle: string): boolean {
   }
 }
 
-function writePidFile(pid: number): void {
+function writePidFile(modelId: string, pid: number): void {
   mkdirSync(PID_DIR, { recursive: true })
-  writeFileSync(PID_FILE, String(pid), "utf8")
+  writeFileSync(pidFilePathFor(modelId), String(pid), "utf8")
 }
 
-function clearPidFile(): void {
-  try { unlinkSync(PID_FILE) } catch {}
+function clearPidFile(modelId: string): void {
+  try { unlinkSync(pidFilePathFor(modelId)) } catch {}
 }
 
-function cleanupStalePidFile(): void {
+// Cleans up a stale PID left behind by a crashed/killed previous session for THIS specific
+// model.id only — never touches another model's PID file, so it can never kill a different
+// model's still-alive process the way a single shared PID file did.
+function cleanupStalePidFile(modelId: string): void {
+  const pidFile = pidFilePathFor(modelId)
   try {
-    if (!existsSync(PID_FILE)) return
-    const raw = readFileSync(PID_FILE, "utf8").trim()
-    if (!raw) { clearPidFile(); return }
+    if (!existsSync(pidFile)) return
+    const raw = readFileSync(pidFile, "utf8").trim()
+    if (!raw) { clearPidFile(modelId); return }
     const pid = parseInt(raw, 10)
-    if (isNaN(pid)) { clearPidFile(); return }
-    if (!pidAlive(pid)) { clearPidFile(); return }
+    if (isNaN(pid)) { clearPidFile(modelId); return }
+    if (!pidAlive(pid)) { clearPidFile(modelId); return }
     if (processNameMatches(pid, "llama-server") || processNameMatches(pid, "llama")) {
       try {
         process.kill(pid, "SIGTERM")
@@ -118,7 +130,7 @@ function cleanupStalePidFile(): void {
         if (pidAlive(pid)) process.kill(pid, "SIGKILL")
       } catch {}
     }
-    clearPidFile()
+    clearPidFile(modelId)
   } catch {}
 }
 
@@ -229,16 +241,25 @@ export class OllamaAdapter implements EngineAdapter {
   }
 }
 
+interface LlamaCppProcess {
+  process: ReturnType<typeof spawn>
+  port: number
+  host: string
+  model: ModelRecord
+  modelPath: string
+  lastStderr: string[]
+}
+
 export class LlamaCppAdapter implements EngineAdapter {
   kind = "llama.cpp" as const
   name = "llama.cpp"
   priority = 20
   private resolved: { bin: string; args: string[] } | null
-  process: ReturnType<typeof spawn> | null = null
-  port = 0
-  host = "127.0.0.1"
-  private _currentModel: ModelRecord | null = null
-  lastStderr: string[] = []
+  // Per-model state, keyed by model.id — NOT instance fields. A single set of instance
+  // fields (this.process/this.port/...) meant a second concurrent serve() call silently
+  // clobbered the first model's bookkeeping (and, via the old shared PID file, could
+  // actively kill it). See epic-002-foundation.yaml:story-212 for the full writeup.
+  private processes = new Map<string, LlamaCppProcess>()
   private _watchdogInterval: ReturnType<typeof setInterval> | null = null
 
   constructor() {
@@ -249,12 +270,17 @@ export class LlamaCppAdapter implements EngineAdapter {
     return this.resolved !== null
   }
 
-  get endpoint(): string {
-    return this.port ? `http://${this.host}:${this.port}/v1` : ""
+  /** Number of models this adapter currently has a live process handle for. */
+  get servedCount(): number {
+    return this.processes.size
   }
 
-  get alive(): boolean {
-    return this.process !== null && this.process.exitCode === null
+  private endpointFor(entry: LlamaCppProcess): string {
+    return entry.port ? `http://${entry.host}:${entry.port}/v1` : ""
+  }
+
+  private isAliveEntry(entry: LlamaCppProcess): boolean {
+    return entry.process.exitCode === null
   }
 
   canHandle(model: ModelRecord): boolean {
@@ -264,6 +290,18 @@ export class LlamaCppAdapter implements EngineAdapter {
   async serve(model: ModelRecord, port: number, opts?: ServeOptions): Promise<ServingProcess> {
     const existing = runningProcesses.get(model.id)
     if (existing) return existing
+    const existingLocal = this.processes.get(model.id)
+    if (existingLocal && this.isAliveEntry(existingLocal)) {
+      const sp: ServingProcess = {
+        modelId: model.id,
+        engineKind: this.kind,
+        pid: existingLocal.process.pid ?? 0,
+        port: existingLocal.port,
+        endpoint: this.endpointFor(existingLocal),
+        startedAt: new Date().toISOString(),
+      }
+      return sp
+    }
 
     if (!this.resolved) {
       throw new Error(
@@ -272,21 +310,21 @@ export class LlamaCppAdapter implements EngineAdapter {
       )
     }
 
-    cleanupStalePidFile()
+    // Scoped to THIS model.id only — cannot touch a different, still-alive model's process.
+    cleanupStalePidFile(model.id)
 
-    this._currentModel = model
-    this.lastStderr = []
-    this.port = port || findFreePort()
-    this.modelPath = resolve(await resolveModelPath(model))
+    const host = "127.0.0.1"
+    const resolvedPort = port || findFreePort()
+    const modelPath = resolve(await resolveModelPath(model))
 
     const resolved = resolveLlamaBin()
     this.resolved = resolved ?? this.resolved
 
     const argv: string[] = [
       ...this.resolved.args,
-      "--model", this.modelPath,
-      "--host", this.host,
-      "--port", String(this.port),
+      "--model", modelPath,
+      "--host", host,
+      "--port", String(resolvedPort),
       "--ctx-size", String(resolveCtxSize(model)),
       "--jinja",
       "--no-webui",
@@ -295,11 +333,14 @@ export class LlamaCppAdapter implements EngineAdapter {
     const ngl = model.quantization ? parseInt(model.quantization.replace(/[^0-9]/g, "")) || 99 : 99
     argv.push("-ngl", String(ngl))
 
-    this.process = spawn(this.resolved.bin, argv, opts?.detach ? { stdio: "ignore", detached: true } : { stdio: "pipe" })
-    if (opts?.detach) this.process.unref()
-    writePidFile(this.process.pid ?? 0)
+    const proc = spawn(this.resolved.bin, argv, opts?.detach ? { stdio: "ignore", detached: true } : { stdio: "pipe" })
+    if (opts?.detach) proc.unref()
 
-    this.tailStderr(this.process)
+    const entry: LlamaCppProcess = { process: proc, port: resolvedPort, host, model, modelPath, lastStderr: [] }
+    this.processes.set(model.id, entry)
+    writePidFile(model.id, proc.pid ?? 0)
+
+    this.tailStderr(model.id, proc)
 
     if (typeof process !== "undefined") {
       const parentPid = parseInt(process.env.MINICPM_PARENT_PID ?? "", 10)
@@ -312,9 +353,9 @@ export class LlamaCppAdapter implements EngineAdapter {
     const sp: ServingProcess = {
       modelId: model.id,
       engineKind: this.kind,
-      pid: this.process.pid ?? 0,
-      port: this.port,
-      endpoint: this.endpoint,
+      pid: proc.pid ?? 0,
+      port: resolvedPort,
+      endpoint: this.endpointFor(entry),
       startedAt: new Date().toISOString(),
     }
     runningProcesses.set(model.id, sp)
@@ -328,8 +369,9 @@ export class LlamaCppAdapter implements EngineAdapter {
     })
 
     try {
-      await this.waitForHealth(90_000)
+      await this.waitForHealth(model.id, 90_000)
     } catch (err) {
+      this.processes.delete(model.id)
       runningProcesses.delete(model.id)
       globalEmitter.modelUnloaded(sessionId, model.id, model.name, this.kind, {
         reason: "health_timeout",
@@ -339,9 +381,11 @@ export class LlamaCppAdapter implements EngineAdapter {
       throw err
     }
 
-    this.process.on("exit", () => {
+    proc.on("exit", () => {
+      this.processes.delete(model.id)
       runningProcesses.delete(model.id)
       removeServer(model.id)
+      if (this.processes.size === 0) this.stopWatchdog()
       globalEmitter.modelUnloaded(sessionId, model.id, model.name, this.kind, {
         reason: "process_exit",
         duration_sec: (Date.now() - new Date(sp.startedAt).getTime()) / 1000,
@@ -353,10 +397,10 @@ export class LlamaCppAdapter implements EngineAdapter {
   }
 
   async stop(sp: ServingProcess): Promise<void> {
-    this.stopWatchdog()
-    const proc = this.process
-    if (proc) {
-      this.process = null
+    const entry = this.processes.get(sp.modelId)
+    if (entry) {
+      this.processes.delete(sp.modelId)
+      const proc = entry.process
       try { process.kill(proc.pid!, "SIGTERM") } catch {}
       const deadline = Date.now() + 5_000
       while (Date.now() < deadline && proc.exitCode === null) {
@@ -366,6 +410,9 @@ export class LlamaCppAdapter implements EngineAdapter {
         try { process.kill(proc.pid!, "SIGKILL") } catch {}
       }
     } else if (sp.pid > 0) {
+      // No local handle (e.g. this adapter instance didn't spawn it — restored from
+      // server-state.ts after a restart). Fall back to killing by the ServingProcess's
+      // own recorded pid, never a different entry's pid.
       try { process.kill(sp.pid, "SIGTERM") } catch {}
       const deadline = Date.now() + 5_000
       while (Date.now() < deadline && pidAlive(sp.pid)) {
@@ -375,9 +422,10 @@ export class LlamaCppAdapter implements EngineAdapter {
         try { process.kill(sp.pid, "SIGKILL") } catch {}
       }
     }
-    clearPidFile()
+    clearPidFile(sp.modelId)
     removeServer(sp.modelId)
     runningProcesses.delete(sp.modelId)
+    if (this.processes.size === 0) this.stopWatchdog()
     const sessionId = `llamacpp-${sp.modelId}-${new Date(sp.startedAt).getTime()}`
     globalEmitter.modelUnloaded(sessionId, sp.modelId, sp.modelId, this.kind, {
       reason: "user_stop",
@@ -387,12 +435,18 @@ export class LlamaCppAdapter implements EngineAdapter {
   }
 
   async status(): Promise<EngineStatus> {
-    const targetPort = this.port || 8080
+    // EngineStatus is a single-object shape (one port/health), but this adapter can now
+    // serve several models at once — modelsCount reflects the real concurrent count;
+    // the health probe below is only against the most-recently-served entry, since there's
+    // no per-model slot in EngineStatus to report more than one health check in.
+    const entries = [...this.processes.values()]
+    const latest = entries[entries.length - 1]
+    const targetPort = latest?.port || 8080
     try {
       const res = await fetch(`http://127.0.0.1:${targetPort}/health`, { signal: AbortSignal.timeout(2000) })
-      return { kind: this.kind, running: res.ok, modelsCount: 0, port: targetPort, version: null, healthy: res.ok }
+      return { kind: this.kind, running: res.ok, modelsCount: this.processes.size, port: targetPort, version: null, healthy: res.ok }
     } catch {
-      return { kind: this.kind, running: false, modelsCount: 0, port: targetPort, version: null, healthy: false }
+      return { kind: this.kind, running: false, modelsCount: this.processes.size, port: targetPort, version: null, healthy: false }
     }
   }
 
@@ -402,10 +456,12 @@ export class LlamaCppAdapter implements EngineAdapter {
   }
 
   async *streamChat(
+    modelId: string,
     messages: Array<{ role: string; content: string }>,
     opts: ChatOptions = {},
   ): AsyncGenerator<StreamEvent> {
-    if (!this.alive) throw new Error("llama-server not running")
+    const entry = this.processes.get(modelId)
+    if (!entry || !this.isAliveEntry(entry)) throw new Error(`llama-server not running for model ${modelId}`)
 
     const body = {
       model: "homestead",
@@ -419,7 +475,7 @@ export class LlamaCppAdapter implements EngineAdapter {
       ...(opts.stop ? { stop: opts.stop } : {}),
     }
 
-    const res = await fetch(`${this.endpoint}/chat/completions`, {
+    const res = await fetch(`${this.endpointFor(entry)}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -460,11 +516,12 @@ export class LlamaCppAdapter implements EngineAdapter {
     }
   }
 
-  async weightInit(): Promise<number> {
-    if (!this.alive) throw new Error("llama-server not running")
+  async weightInit(modelId: string): Promise<number> {
+    const entry = this.processes.get(modelId)
+    if (!entry || !this.isAliveEntry(entry)) throw new Error(`llama-server not running for model ${modelId}`)
     const t0 = Date.now()
     try {
-      await fetch(`${this.endpoint}/chat/completions`, {
+      await fetch(`${this.endpointFor(entry)}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -482,29 +539,35 @@ export class LlamaCppAdapter implements EngineAdapter {
     return Date.now() - t0
   }
 
-  private tailStderr(proc: ReturnType<typeof spawn>): void {
+  private tailStderr(modelId: string, proc: ReturnType<typeof spawn>): void {
     if (!proc.stderr) return
     const rl = createInterface({ input: proc.stderr })
     rl.on("line", (line) => {
-      this.lastStderr.push(line)
-      if (this.lastStderr.length > 80) this.lastStderr.shift()
+      const entry = this.processes.get(modelId)
+      if (!entry) return
+      entry.lastStderr.push(line)
+      if (entry.lastStderr.length > 80) entry.lastStderr.shift()
     })
   }
 
-  private async waitForHealth(timeoutMs: number): Promise<void> {
+  private async waitForHealth(modelId: string, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs
     let lastErr: unknown = null
     while (Date.now() < deadline) {
-      if (this.process?.exitCode !== null && this.process !== null) {
-        const code = this.process.exitCode
-        const tail = this.lastStderr.slice(-30).join("\n") || "(no stderr)"
-        clearPidFile()
+      const entry = this.processes.get(modelId)
+      if (!entry) {
+        throw new Error(`llama-server process for ${modelId} was removed before it became healthy`)
+      }
+      if (entry.process.exitCode !== null) {
+        const code = entry.process.exitCode
+        const tail = entry.lastStderr.slice(-30).join("\n") || "(no stderr)"
+        clearPidFile(modelId)
         throw new Error(
           `llama-server exited early code=${code}\n----- stderr tail -----\n${tail}`
         )
       }
       try {
-        const res = await fetch(`http://${this.host}:${this.port}/health`, {
+        const res = await fetch(`http://${entry.host}:${entry.port}/health`, {
           signal: AbortSignal.timeout(2_000),
         })
         if (res.status === 200) return
@@ -513,14 +576,18 @@ export class LlamaCppAdapter implements EngineAdapter {
       }
       await new Promise((r) => setTimeout(r, 400))
     }
-    const tail = this.lastStderr.slice(-30).join("\n") || "(no stderr)"
-    clearPidFile()
+    const entry = this.processes.get(modelId)
+    const tail = entry?.lastStderr.slice(-30).join("\n") || "(no stderr)"
+    clearPidFile(modelId)
     throw new Error(
       `llama-server did not become ready in ${(timeoutMs / 1000).toFixed(0)}s (last: ${lastErr})\n----- stderr tail -----\n${tail}`
     )
   }
 
+  // One shared watchdog covers ALL concurrently-tracked processes — on parent death it
+  // must stop every one of them, not just the first match it happens to find.
   private startWatchdog(parentPid: number): void {
+    if (this._watchdogInterval) return
     this._watchdogInterval = setInterval(() => {
       try {
         process.kill(parentPid, 0)
@@ -528,7 +595,6 @@ export class LlamaCppAdapter implements EngineAdapter {
         for (const [, sp] of runningProcesses) {
           if (sp.engineKind === this.kind) {
             this.stop(sp)
-            break
           }
         }
       }
@@ -541,8 +607,6 @@ export class LlamaCppAdapter implements EngineAdapter {
       this._watchdogInterval = null
     }
   }
-
-  private modelPath = ""
 }
 
 export class EngineManager {
