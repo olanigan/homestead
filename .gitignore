@@ -12,3 +12,5 @@ package-lock.json
 *.tsbuildinfo
 justfile
 .ci/
+.stryker-tmp/
+reports/mutation/
