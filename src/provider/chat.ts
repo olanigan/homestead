@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import type { Registry } from "../core/registry.js"
-import { engineManager } from "../engines/index.js"
+import { engineManager, isStaleProcess } from "../engines/index.js"
 import { proxyToEngine } from "./proxy.js"
 import { errorResponse } from "./errors.js"
 
@@ -49,7 +49,7 @@ export function createChatRoutes(registry: Registry): Hono {
 
     const processes = engineManager.getRunningProcesses()
     const proc = processes.find((p) => p.modelId === model.id)
-    if (!proc) {
+    if (!proc || isStaleProcess(proc, model)) {
       registry.updateStatus(model.id, "stopped")
       try {
         const engine = engineManager.selectEngine(model)

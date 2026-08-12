@@ -46,6 +46,7 @@ export interface ServingProcess {
   pid: number
   endpoint: string
   startedAt: string
+  ctxSize?: number
 }
 
 export interface EngineStatus {

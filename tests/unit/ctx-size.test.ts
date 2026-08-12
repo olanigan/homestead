@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
-import { resolveCtxSize } from "../../src/engines/index.js"
-import type { ModelRecord } from "../../src/types.js"
+import { resolveCtxSize, isStaleProcess } from "../../src/engines/index.js"
+import type { ModelRecord, ServingProcess } from "../../src/types.js"
 
 function makeModel(metadata: Record<string, unknown> = {}): ModelRecord {
   const now = new Date().toISOString()
@@ -42,5 +42,37 @@ describe("resolveCtxSize", () => {
   test("caps context_length at 32768 for very large native windows", () => {
     expect(resolveCtxSize(makeModel({ context_length: 262144 }))).toBe(32768)
     expect(resolveCtxSize(makeModel({ context_length: 1048576 }))).toBe(32768)
+  })
+})
+
+function makeProc(ctxSize: number | undefined): ServingProcess {
+  return {
+    modelId: "test-1",
+    engineKind: "llama.cpp",
+    port: 18766,
+    pid: 1234,
+    endpoint: "http://127.0.0.1:18766",
+    startedAt: new Date().toISOString(),
+    ctxSize,
+  }
+}
+
+describe("isStaleProcess", () => {
+  test("flags a process launched with the pre-fix 4096 default once metadata is known", () => {
+    // Reproduces the Pi trace: ornith-1.0-9b served at 4096 (metadata not yet
+    // scanned), then metadata later reports a real 32768 context_length —
+    // the running process must be recognized as stale so it gets respawned.
+    const model = makeModel({ context_length: 32768 })
+    expect(isStaleProcess(makeProc(4096), model)).toBe(true)
+  })
+
+  test("does not flag a process already running at the resolved ctx size", () => {
+    const model = makeModel({ context_length: 32768 })
+    expect(isStaleProcess(makeProc(32768), model)).toBe(false)
+  })
+
+  test("does not flag a process with no recorded ctxSize (pre-upgrade persisted state)", () => {
+    const model = makeModel({ context_length: 32768 })
+    expect(isStaleProcess(makeProc(undefined), model)).toBe(false)
   })
 })
