@@ -1,6 +1,6 @@
 import { Hono } from "hono"
 import type { Registry } from "../core/registry.js"
-import { engineManager, isStaleProcess } from "../engines/index.js"
+import { ensureServingProcess } from "./serve-model.js"
 import { proxyToEngine } from "./proxy.js"
 import { errorResponse } from "./errors.js"
 
@@ -33,38 +33,12 @@ export function createChatRoutes(registry: Registry): Hono {
       return errorResponse(c, 400, "download is incomplete", "invalid_request_error", "model_not_servable")
     }
 
-    if (model.status !== "serving") {
-      const engine = engineManager.selectEngine(model)
-      if (!engine) {
-        return errorResponse(c, 503, `No compatible engine for format: ${model.format}`, "server_error", "engine_unavailable")
-      }
-      try {
-        const proc = await engine.serve(model, 8080)
-        registry.updateStatus(model.id, "serving")
-        return proxyToEngine(proc.endpoint, "/chat/completions", engineBody)
-      } catch (err) {
-        return errorResponse(c, 503, `Failed to serve model: ${err}`, "server_error", "serve_failed")
-      }
+    const result = await ensureServingProcess(model, registry)
+    if (result.error) {
+      return errorResponse(c, result.error.status, result.error.message, result.error.type, result.error.code)
     }
 
-    const processes = engineManager.getRunningProcesses()
-    const proc = processes.find((p) => p.modelId === model.id)
-    if (!proc || isStaleProcess(proc, model)) {
-      registry.updateStatus(model.id, "stopped")
-      try {
-        const engine = engineManager.selectEngine(model)
-        if (!engine) {
-          return errorResponse(c, 503, `No compatible engine for format: ${model.format}`, "server_error", "engine_unavailable")
-        }
-        const newProc = await engine.serve(model, 8080)
-        registry.updateStatus(model.id, "serving")
-        return proxyToEngine(newProc.endpoint, "/chat/completions", engineBody)
-      } catch (err) {
-        return errorResponse(c, 503, `Failed to serve model: ${err}`, "server_error", "serve_failed")
-      }
-    }
-
-    return proxyToEngine(proc.endpoint, "/chat/completions", engineBody)
+    return proxyToEngine(result.proc.endpoint, "/chat/completions", engineBody)
   })
 
   return app
