@@ -26,6 +26,13 @@ export function resolveCtxSize(model: ModelRecord): number {
   return DEFAULT_CTX_SIZE
 }
 
+// A running process launched before metadata-derived ctx-size was known (or
+// before the model's resolved ctx-size otherwise changed) keeps serving the
+// stale value forever unless something notices the drift and respawns it.
+export function isStaleProcess(proc: ServingProcess, model: ModelRecord): boolean {
+  return proc.ctxSize !== undefined && proc.ctxSize !== resolveCtxSize(model)
+}
+
 function resolveLlamaBin(): { bin: string; args: string[] } | null {
   for (const name of ["llama", "llama-server"]) {
     try {
@@ -263,7 +270,10 @@ export class LlamaCppAdapter implements EngineAdapter {
 
   async serve(model: ModelRecord, port: number, opts?: ServeOptions): Promise<ServingProcess> {
     const existing = runningProcesses.get(model.id)
-    if (existing) return existing
+    if (existing) {
+      if (!isStaleProcess(existing, model)) return existing
+      await this.stop(existing)
+    }
 
     if (!this.resolved) {
       throw new Error(
@@ -282,12 +292,13 @@ export class LlamaCppAdapter implements EngineAdapter {
     const resolved = resolveLlamaBin()
     this.resolved = resolved ?? this.resolved
 
+    const ctxSize = resolveCtxSize(model)
     const argv: string[] = [
       ...this.resolved.args,
       "--model", this.modelPath,
       "--host", this.host,
       "--port", String(this.port),
-      "--ctx-size", String(resolveCtxSize(model)),
+      "--ctx-size", String(ctxSize),
       "--jinja",
       "--no-webui",
     ]
@@ -316,6 +327,7 @@ export class LlamaCppAdapter implements EngineAdapter {
       port: this.port,
       endpoint: this.endpoint,
       startedAt: new Date().toISOString(),
+      ctxSize,
     }
     runningProcesses.set(model.id, sp)
     addServer(sp)
