@@ -1,0 +1,20 @@
+#!/bin/bash
+# Fake llama-server binary for tests. Deliberately a plain bash script (not a node/bun
+# shebang script) so `ps -o comm=` reports "llama-server" — matching real llama-server's
+# process name, which the adapter's stale-PID-file detection depends on
+# (processNameMatches() in src/engines/index.ts). A node/bun shebang script would show up
+# as "node"/"bun" in comm instead, since the kernel execs the interpreter directly.
+set -e
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CHILD_PID=""
+cleanup() {
+  if [ -n "$CHILD_PID" ]; then
+    kill "$CHILD_PID" 2>/dev/null || true
+    wait "$CHILD_PID" 2>/dev/null || true
+  fi
+  exit 0
+}
+trap cleanup SIGTERM SIGINT
+bun run "$DIR/fake-server.ts" "$@" &
+CHILD_PID=$!
+wait "$CHILD_PID"
