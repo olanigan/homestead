@@ -129,6 +129,22 @@ export function readGgufHeader(filepath: string): GgufHeader | null {
   }
 }
 
+// GGUF's KV spec has no universal "parameter count" key (unlike architecture/context_length/
+// file_type, which general.* keys standardize) — some architectures expose their own, but
+// there's no single key to read across all of them without a full tensor-shape walk. Instead,
+// estimate from the common "<size>B"/"<size>M" naming convention (e.g. "Qwen2.5-7B-Instruct",
+// "LFM2-1.2B-Tool", "SmolLM2-135M-Instruct") that HF repo names and GGUF filenames already
+// follow in practice. Best-effort by design — returns null rather than guessing when no size
+// token is present, and picks the first (leftmost) match so MoE names like "LFM2-8B-A1B" report
+// the total parameter count, not the per-expert active count.
+const PARAM_COUNT_PATTERN = /(?<![A-Za-z0-9])(\d+(?:\.\d+)?)([BM])(?![A-Za-z0-9])/i
+
+export function estimateParameterCount(name: string): string | null {
+  const match = name.match(PARAM_COUNT_PATTERN)
+  if (!match) return null
+  return `${match[1]}${match[2]!.toUpperCase()}`
+}
+
 export function readGgufMetadata(filepath: string): GgufMetadata | null {
   try {
     const fd = openSync(filepath, "r")
