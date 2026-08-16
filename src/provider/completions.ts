@@ -38,7 +38,15 @@ export function createCompletionsRoutes(registry: Registry): Hono {
       return errorResponse(c, result.error.status, result.error.message, result.error.type, result.error.code)
     }
 
-    return proxyToEngine(result.proc.endpoint, "/completions", engineBody)
+    return proxyToEngine({
+      endpoint: result.proc.endpoint,
+      path: "/completions",
+      body: engineBody,
+      modelId: model.id,
+      modelName: model.name,
+      engineKind: result.proc.engineKind,
+      clientHeader: c.req.header("x-homestead-client"),
+    })
   })
 
   return app
