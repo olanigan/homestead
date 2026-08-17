@@ -119,7 +119,13 @@ export class Registry {
   }
 
   get(idOrName: string): ModelRecord | null {
-    const row = this.db.prepare(`SELECT * FROM models WHERE id = ? OR name = ? LIMIT 1`).get(idOrName, idOrName) as RawRow | null
+    let row = this.db.prepare(`SELECT * FROM models WHERE id = ? OR name = ? LIMIT 1`).get(idOrName, idOrName) as RawRow | null
+    if (!row) {
+      // Support common provider aliases (e.g. deepseek-v4-flash -> deepseek-chat)
+      if (idOrName.startsWith("deepseek-") || idOrName.includes("deepseek")) {
+        row = this.db.prepare(`SELECT * FROM models WHERE id = 'deepseek-chat' OR source = 'deepseek' OR engine = 'remote' LIMIT 1`).get() as RawRow | null
+      }
+    }
     return row ? rowToModel(row) : null
   }
 

@@ -4,7 +4,6 @@ import { EngineManager, runningProcesses } from "../../src/engines/index.js"
 import { proxyToEngine, resolveProxyUrl } from "../../src/provider/proxy.js"
 import { ensureServingProcess } from "../../src/provider/serve-model.js"
 import { Registry } from "../../src/core/registry.js"
-import { globalEmitter } from "../../src/observability/emitter.js"
 import type { ModelRecord, ServingProcess } from "../../src/types.js"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -200,7 +199,7 @@ describe("ModalEngineAdapter", () => {
 
       const server = Bun.serve({
         port: 18899,
-        fetch(req) {
+        fetch(_req) {
           return new Response(JSON.stringify({ choices: [{ message: { content: "pong" } }] }), {
             headers: { "Content-Type": "application/json" },
           })

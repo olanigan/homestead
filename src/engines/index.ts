@@ -9,6 +9,7 @@ import { globalEmitter } from "../observability/emitter.js"
 import { addServer, removeServer, loadServers } from "../core/server-state.js"
 
 import { ModalEngineAdapter } from "./modal.js"
+import { RemoteOpenAIAdapter } from "./remote.js"
 
 export { runningProcesses } from "./state.js"
 import { runningProcesses } from "./state.js"
@@ -635,6 +636,7 @@ export class EngineManager {
     this.adapters.push(new OllamaAdapter())
     this.adapters.push(new LlamaCppAdapter())
     this.adapters.push(new ModalEngineAdapter())
+    this.adapters.push(new RemoteOpenAIAdapter())
   }
 
   register(adapter: EngineAdapter): void {
@@ -667,4 +669,5 @@ export class EngineManager {
 
 export const engineManager = new EngineManager()
 export { ModalEngineAdapter } from "./modal.js"
+export { RemoteOpenAIAdapter } from "./remote.js"
 

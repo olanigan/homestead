@@ -1,4 +1,4 @@
-export type ModelSource = "ollama" | "hf-hub" | "gguf-file" | "mlx" | "engine-probe" | "imported" | "modal"
+export type ModelSource = "ollama" | "hf-hub" | "gguf-file" | "mlx" | "engine-probe" | "imported" | "modal" | "deepseek" | "openrouter" | "remote"
 
 export type ModelFormat = "gguf" | "safetensors" | "mlx" | "pt" | "pth" | "onnx" | "aimodel" | "unknown"
 
@@ -6,7 +6,7 @@ export type ModelStatus = "discovered" | "downloading" | "incomplete" | "serving
 
 export type ModelTag = "weights" | "vocab" | "cloud" | "incomplete" | "unknown"
 
-export type EngineKind = "ollama" | "llama.cpp" | "hf-transformers" | "mlx" | "modal"
+export type EngineKind = "ollama" | "llama.cpp" | "hf-transformers" | "mlx" | "modal" | "remote" | "deepseek" | "openrouter"
 
 export interface ModelRecord {
   id: string

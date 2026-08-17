@@ -7,7 +7,16 @@ export function isServable(model: ModelRecord): boolean {
   if (model.status === "incomplete") return false
   const tags = (model.metadata?.tags as string[]) || []
   if (tags.includes("vocab")) return false
-  if (tags.includes("cloud")) return false
+  const isRemote =
+    model.engine === "modal" ||
+    model.engine === "remote" ||
+    model.source === "modal" ||
+    model.source === "deepseek" ||
+    model.source === "openrouter" ||
+    model.source === "remote" ||
+    typeof model.metadata?.modalEndpoint === "string" ||
+    typeof model.metadata?.remoteEndpoint === "string"
+  if (tags.includes("cloud") && !isRemote) return false
   if (!engineManager.selectEngine(model)) return false
   return true
 }
