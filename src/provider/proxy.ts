@@ -10,6 +10,21 @@ export interface ProxyToEngineOptions {
   modelName: string
   engineKind: string
   clientHeader?: string
+  headers?: Record<string, string>
+  sessionId?: string
+}
+
+export function resolveProxyUrl(endpoint: string, path: string): string {
+  const cleanEndpoint = endpoint.replace(/\/+$/, "")
+  const cleanPath = path.startsWith("/") ? path : `/${path}`
+
+  if (cleanEndpoint.endsWith("/v1") && cleanPath.startsWith("/v1/")) {
+    return `${cleanEndpoint}${cleanPath.slice(3)}`
+  }
+  if (cleanEndpoint.endsWith("/v1") && cleanPath === "/v1") {
+    return cleanEndpoint
+  }
+  return `${cleanEndpoint}${cleanPath}`
 }
 
 // OpenAI-compatible engines echo token counts back in a top-level `usage`
@@ -42,15 +57,55 @@ function extractStreamUsage(accumulated: string): UsageLike | undefined {
   }
 }
 
-export async function proxyToEngine(opts: ProxyToEngineOptions): Promise<Response> {
-  const { endpoint, path, body, modelId, modelName, engineKind, clientHeader } = opts
-  const url = `${endpoint}${path}`
+export async function proxyToEngine(
+  optsOrEndpoint: ProxyToEngineOptions | string,
+  pathArg?: string,
+  bodyArg?: unknown,
+  customHeadersArg?: Record<string, string>,
+  ctxArg?: { sessionId?: string; modelId?: string; modelName?: string; engineKind?: string; clientHeader?: string }
+): Promise<Response> {
+  let opts: ProxyToEngineOptions
+  if (typeof optsOrEndpoint === "string") {
+    opts = {
+      endpoint: optsOrEndpoint,
+      path: pathArg ?? "/chat/completions",
+      body: bodyArg,
+      headers: customHeadersArg,
+      modelId: ctxArg?.modelId ?? "unknown",
+      modelName: ctxArg?.modelName ?? "unknown",
+      engineKind: ctxArg?.engineKind ?? "homestead",
+      clientHeader: ctxArg?.clientHeader,
+      sessionId: ctxArg?.sessionId,
+    }
+  } else {
+    opts = optsOrEndpoint
+  }
+
+  const { endpoint, path, body, modelId, modelName, engineKind, clientHeader, headers: customHeaders, sessionId: customSessionId } = opts
+  const url = resolveProxyUrl(endpoint, path)
   const isStream = typeof body === "object" && body !== null && (body as Record<string, unknown>).stream === true
   const requestId = randomUUID()
   const startedAt = Date.now()
 
-  const activeSession = globalEmitter.getDb().getActiveSessionByModel(modelId)
-  const sessionId = activeSession?.session_id ?? `${engineKind}-${modelId}-${Date.now()}`
+  let sessionId = customSessionId
+  if (!sessionId) {
+    const activeSession = globalEmitter.getDb().getActiveSessionByModel(modelId)
+    sessionId = activeSession?.session_id ?? `${engineKind}-${modelId}-${Date.now()}`
+  }
+
+  let inputTokens: number | undefined
+  if (typeof body === "object" && body !== null) {
+    const b = body as Record<string, unknown>
+    if (typeof b.prompt === "string") {
+      inputTokens = Math.ceil(b.prompt.length / 4)
+    } else if (Array.isArray(b.messages)) {
+      const charCount = (b.messages as Array<{ content?: string }>).reduce(
+        (acc: number, m) => acc + (typeof m.content === "string" ? m.content.length : 0),
+        0
+      )
+      inputTokens = Math.ceil(charCount / 4)
+    }
+  }
 
   const requestPayload: RequestPayload = {
     request_id: requestId,
@@ -58,87 +113,108 @@ export async function proxyToEngine(opts: ProxyToEngineOptions): Promise<Respons
     path,
     model: modelName,
     client: clientHeader ?? "unknown",
+    input_tokens: inputTokens,
+    max_tokens: typeof body === "object" && body !== null ? (body as Record<string, unknown>).max_tokens as number : undefined,
+    temperature: typeof body === "object" && body !== null ? (body as Record<string, unknown>).temperature as number : undefined,
   }
   globalEmitter.request(sessionId, modelId, modelName, engineKind, requestPayload)
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(customHeaders ?? {}),
+  }
   if (clientHeader) headers["X-Homestead-Client"] = clientHeader
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  })
-
-  const emitResponse = (payload: ResponsePayload): void => {
-    globalEmitter.response(sessionId, modelId, modelName, engineKind, {
-      ...payload,
-      client: clientHeader ?? "unknown",
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
     })
-  }
 
-  if (!response.ok) {
-    const text = await response.text()
-    emitResponse({ request_id: requestId, latency_ms: Date.now() - startedAt, status: response.status })
+    const emitResponse = (payload: ResponsePayload): void => {
+      globalEmitter.response(sessionId, modelId, modelName, engineKind, {
+        ...payload,
+        client: clientHeader ?? "unknown",
+      })
+    }
+
+    if (!response.ok) {
+      const text = await response.text()
+      emitResponse({ request_id: requestId, latency_ms: Date.now() - startedAt, status: response.status })
+      globalEmitter.error(sessionId, modelId, modelName, engineKind, {
+        request_id: requestId,
+        message: text.slice(0, 500),
+        code: `engine_http_${response.status}`,
+      })
+      return new Response(text, { status: response.status, headers: { "Content-Type": "application/json" } })
+    }
+
+    if (isStream) {
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let tail = ""
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const { done, value } = await reader.read()
+          if (done) {
+            controller.close()
+            const usage = extractStreamUsage(tail)
+            emitResponse({
+              request_id: requestId,
+              latency_ms: Date.now() - startedAt,
+              status: 200,
+              input_tokens: usage?.prompt_tokens ?? inputTokens,
+              output_tokens: usage?.completion_tokens,
+              total_tokens: usage?.total_tokens,
+            })
+            return
+          }
+          tail += decoder.decode(value, { stream: true })
+          if (tail.length > 16_384) tail = tail.slice(-16_384)
+          controller.enqueue(value)
+        },
+        cancel() {
+          emitResponse({ request_id: requestId, latency_ms: Date.now() - startedAt, status: 499 })
+        },
+      })
+      return new Response(stream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      })
+    }
+
+    const data = (await response.json()) as Record<string, unknown>
+    const usage = extractUsage(data)
+    emitResponse({
+      request_id: requestId,
+      latency_ms: Date.now() - startedAt,
+      status: 200,
+      input_tokens: usage?.prompt_tokens ?? inputTokens,
+      output_tokens: usage?.completion_tokens,
+      total_tokens: usage?.total_tokens,
+    })
+    return new Response(JSON.stringify(data), {
+      headers: { "Content-Type": "application/json" },
+    })
+  } catch (err) {
     globalEmitter.error(sessionId, modelId, modelName, engineKind, {
       request_id: requestId,
-      message: text.slice(0, 500),
-      code: `engine_http_${response.status}`,
+      message: `Failed to proxy request to ${url}: ${err instanceof Error ? err.message : String(err)}`,
+      code: "engine_unreachable",
     })
-    return new Response(text, { status: response.status, headers: { "Content-Type": "application/json" } })
+    return new Response(
+      JSON.stringify({
+        error: {
+          message: `Failed to proxy request to ${url}: ${err instanceof Error ? err.message : String(err)}`,
+          type: "proxy_error",
+          code: "engine_unreachable",
+        },
+      }),
+      { status: 502, headers: { "Content-Type": "application/json" } }
+    )
   }
-
-  if (isStream) {
-    // Forward SSE frames as-is (per src/provider/API.md: do NOT buffer or
-    // transform), but observe the tail long enough to pull a final `usage`
-    // object, then emit the response event once the stream finishes.
-    const reader = response.body!.getReader()
-    const decoder = new TextDecoder()
-    let tail = ""
-    const stream = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const { done, value } = await reader.read()
-        if (done) {
-          controller.close()
-          const usage = extractStreamUsage(tail)
-          emitResponse({
-            request_id: requestId,
-            latency_ms: Date.now() - startedAt,
-            status: 200,
-            input_tokens: usage?.prompt_tokens,
-            output_tokens: usage?.completion_tokens,
-            total_tokens: usage?.total_tokens,
-          })
-          return
-        }
-        tail += decoder.decode(value, { stream: true })
-        if (tail.length > 16_384) tail = tail.slice(-16_384)
-        controller.enqueue(value)
-      },
-      cancel() {
-        emitResponse({ request_id: requestId, latency_ms: Date.now() - startedAt, status: 499 })
-      },
-    })
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-      },
-    })
-  }
-
-  const data = (await response.json()) as Record<string, unknown>
-  const usage = extractUsage(data)
-  emitResponse({
-    request_id: requestId,
-    latency_ms: Date.now() - startedAt,
-    status: 200,
-    input_tokens: usage?.prompt_tokens,
-    output_tokens: usage?.completion_tokens,
-    total_tokens: usage?.total_tokens,
-  })
-  return new Response(JSON.stringify(data), {
-    headers: { "Content-Type": "application/json" },
-  })
 }
