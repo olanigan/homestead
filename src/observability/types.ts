@@ -22,8 +22,8 @@ export interface ServingEventEnvelope<P = unknown> {
 
 export interface ModelLoadedPayload {
   endpoint: string
-  port: number
-  pid: number
+  port?: number | null
+  pid?: number | null
   format: string
 }
 

@@ -8,7 +8,9 @@ import type { ModelRecord, EngineAdapter, ServingProcess, EngineStatus, StreamEv
 import { globalEmitter } from "../observability/emitter.js"
 import { addServer, removeServer, loadServers } from "../core/server-state.js"
 
-const runningProcesses = new Map<string, ServingProcess>()
+import { ModalEngineAdapter } from "./modal.js"
+
+export const runningProcesses = new Map<string, ServingProcess>()
 const PID_DIR = join(homedir(), ".homestead")
 
 // PID files are keyed per model.id, not a single shared file — a shared file cannot
@@ -38,6 +40,9 @@ export function resolveCtxSize(model: ModelRecord): number {
 // before the model's resolved ctx-size otherwise changed) keeps serving the
 // stale value forever unless something notices the drift and respawns it.
 export function isStaleProcess(proc: ServingProcess, model: ModelRecord): boolean {
+  if (proc.engineKind === "modal" || proc.endpoint.startsWith("https://")) {
+    return false
+  }
   return proc.ctxSize !== undefined && proc.ctxSize !== resolveCtxSize(model)
 }
 
@@ -422,7 +427,7 @@ export class LlamaCppAdapter implements EngineAdapter {
       if (proc.exitCode === null) {
         try { process.kill(proc.pid!, "SIGKILL") } catch {}
       }
-    } else if (sp.pid > 0) {
+    } else if (sp.pid && sp.pid > 0) {
       // No local handle (e.g. this adapter instance didn't spawn it — restored from
       // server-state.ts after a restart). Fall back to killing by the ServingProcess's
       // own recorded pid, never a different entry's pid.
@@ -628,6 +633,7 @@ export class EngineManager {
   constructor() {
     this.adapters.push(new OllamaAdapter())
     this.adapters.push(new LlamaCppAdapter())
+    this.adapters.push(new ModalEngineAdapter())
   }
 
   register(adapter: EngineAdapter): void {
@@ -659,4 +665,5 @@ export class EngineManager {
 }
 
 export const engineManager = new EngineManager()
+export { ModalEngineAdapter } from "./modal.js"
 

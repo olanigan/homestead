@@ -43,11 +43,15 @@ function save(list: ServingProcess[]): void {
  * were started by another process. Entries with dead PIDs are pruned.
  */
 export function loadServers(): ServingProcess[] {
-  return loadRaw().filter((s) => pidAlive(s.pid))
+  return loadRaw().filter((s) => {
+    if (s.endpoint && (s.endpoint.startsWith("https://") || s.engineKind === "modal")) return true
+    return s.pid !== undefined && s.pid > 0 && pidAlive(s.pid)
+  })
 }
 
 export function addServer(sp: ServingProcess): void {
-  if (!(sp.pid > 0)) return
+  const isRemote = (sp.endpoint && sp.endpoint.startsWith("https://")) || sp.engineKind === "modal"
+  if (!(sp.pid && sp.pid > 0) && !isRemote) return
   const list = loadRaw().filter((s) => s.modelId !== sp.modelId)
   list.push(sp)
   save(list)
