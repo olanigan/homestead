@@ -2,7 +2,7 @@ import { readdirSync, existsSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ModelRecord } from "../types.js"
-import { readGgufHeader, readGgufMetadata } from "../core/gguf.js"
+import { readGgufHeader, readGgufMetadata, estimateParameterCount } from "../core/gguf.js"
 
 interface SearchPath {
   path: string
@@ -75,6 +75,7 @@ export async function scanGgufFiles(): Promise<ModelRecord[]> {
 
       const tags: string[] = ["weights"]
       const meta = readGgufMetadata(filepath)
+      const parameterCount = estimateParameterCount(meta?.name ?? name)
 
       models.push({
         id,
@@ -95,6 +96,7 @@ export async function scanGgufFiles(): Promise<ModelRecord[]> {
           ...(meta?.architecture != null && { architecture: meta.architecture }),
           ...(meta?.file_type != null && { file_type: meta.file_type }),
           ...(meta?.name != null && { gguf_name: meta.name }),
+          ...(parameterCount != null && { parameter_count: parameterCount }),
         },
         discoveredAt: now,
         updatedAt: now,

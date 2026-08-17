@@ -2,7 +2,7 @@ import { readdirSync, statSync, existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { ModelRecord } from "../types.js"
-import { readGgufHeader, readGgufMetadata } from "../core/gguf.js"
+import { readGgufHeader, readGgufMetadata, estimateParameterCount } from "../core/gguf.js"
 
 interface HfModelRef {
   org: string
@@ -226,6 +226,12 @@ export async function scanHfHub(): Promise<ModelRecord[]> {
       ? (ggufFiles.find((f) => !f.path.includes("mmproj"))?.path ?? ggufFiles[0]?.path ?? ref.path)
       : ref.path
 
+    const ggufMeta = ref.detectedFormat === "gguf" && modelPath ? readGgufMetadata(modelPath) : null
+    // Prefer the GGUF-embedded name (general.name) when available — it's often the more
+    // canonical form — falling back to the HF repo name, which also typically carries the
+    // "<size>B"/"<size>M" convention (e.g. "Qwen2.5-7B-Instruct").
+    const parameterCount = estimateParameterCount(ggufMeta?.name ?? modelFullName)
+
     models.push({
       id,
       name: modelFullName,
@@ -244,17 +250,11 @@ export async function scanHfHub(): Promise<ModelRecord[]> {
         isComplete: ref.isComplete,
         fileCount: ref.fileCount,
         tags,
-        ...(() => {
-          if (ref.detectedFormat !== "gguf" || !modelPath) return {}
-          const meta = readGgufMetadata(modelPath)
-          if (!meta) return {}
-          return {
-            ...(meta.context_length != null && { context_length: meta.context_length }),
-            ...(meta.architecture != null && { architecture: meta.architecture }),
-            ...(meta.file_type != null && { file_type: meta.file_type }),
-            ...(meta.name != null && { gguf_name: meta.name }),
-          }
-        })(),
+        ...(ggufMeta?.context_length != null && { context_length: ggufMeta.context_length }),
+        ...(ggufMeta?.architecture != null && { architecture: ggufMeta.architecture }),
+        ...(ggufMeta?.file_type != null && { file_type: ggufMeta.file_type }),
+        ...(ggufMeta?.name != null && { gguf_name: ggufMeta.name }),
+        ...(parameterCount != null && { parameter_count: parameterCount }),
       },
       discoveredAt: now,
       updatedAt: now,
