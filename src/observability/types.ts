@@ -38,6 +38,7 @@ export interface RequestPayload {
   method: string
   path: string
   model: string
+  client?: string
   input_tokens?: number
   max_tokens?: number
   temperature?: number
@@ -45,11 +46,12 @@ export interface RequestPayload {
 
 export interface ResponsePayload {
   request_id: string
-  output_tokens: number
-  input_tokens: number
-  total_tokens: number
+  output_tokens?: number
+  input_tokens?: number
+  total_tokens?: number
   latency_ms: number
   status: number
+  client?: string
 }
 
 export interface ErrorPayload {

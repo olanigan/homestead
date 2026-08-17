@@ -66,10 +66,15 @@ export function createChatRoutes(registry: Registry): Hono {
       customHeaders["Authorization"] = effectiveAuth
     }
 
-    return proxyToEngine(result.proc.endpoint, "/chat/completions", engineBody, customHeaders, {
+    return proxyToEngine({
+      endpoint: result.proc.endpoint,
+      path: "/chat/completions",
+      body: engineBody,
+      headers: customHeaders,
       modelId: model.id,
       modelName: model.name,
       engineKind: result.proc.engineKind,
+      clientHeader: c.req.header("x-homestead-client"),
     })
   })
 
