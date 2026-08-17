@@ -10,7 +10,8 @@ import { addServer, removeServer, loadServers } from "../core/server-state.js"
 
 import { ModalEngineAdapter } from "./modal.js"
 
-export const runningProcesses = new Map<string, ServingProcess>()
+export { runningProcesses } from "./state.js"
+import { runningProcesses } from "./state.js"
 const PID_DIR = join(homedir(), ".homestead")
 
 // PID files are keyed per model.id, not a single shared file — a shared file cannot

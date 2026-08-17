@@ -10,7 +10,7 @@ import type {
 } from "../types.js"
 import { globalEmitter } from "../observability/emitter.js"
 import { addServer, removeServer } from "../core/server-state.js"
-import { runningProcesses } from "./index.js"
+import { runningProcesses } from "./state.js"
 
 interface SpawnedModalProcess {
   process: ChildProcess
