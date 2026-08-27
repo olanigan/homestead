@@ -1,11 +1,18 @@
-import { existsSync, statSync } from "node:fs"
-import { resolve } from "node:path"
+import { existsSync, statSync, writeFileSync } from "node:fs"
+import { resolve, dirname } from "node:path"
 import { Command } from "commander"
 import type { ModelSource, ModelRecord, ServingProcess } from "../types.js"
 import { Registry } from "../core/registry.js"
 import { discoverAll } from "../core/scanner.js"
 import { engineManager } from "../engines/index.js"
+import {
+  parseHomesteadfile,
+  homesteadfileToModelRecord,
+  generateDefaultHomesteadfile,
+  serializeHomesteadfile,
+} from "../core/homesteadfile.js"
 interface ListOptions {
+
   source?: ModelSource
   format?: string
   tag?: string
@@ -127,37 +134,72 @@ export function registerCli(program: Command): void {
 
   program
     .command("serve")
-    .description("Start serving a model")
-    .argument("<name>", "Model name or ID")
+    .description("Start serving a model or Homesteadfile")
+    .argument("[name]", "Model name, ID, or file path")
+    .option("-f, --file <path>", "Path to Homesteadfile")
     .option("-p, --port <port>", "Port to serve on", "8080")
     .option("-d, --detach", "Detach after the server is healthy and exit the CLI")
-    .action(async (name: string, opts: { port: string; detach?: boolean }) => {
-      let model = registry.get(name)
-      if (!model) {
-        if (existsSync(name)) {
-          const stat = statSync(name)
-          const fileName = name.split("/").pop()?.replace(/\.\w+$/, "") || "model"
-          const isGguf = name.endsWith(".gguf")
-          model = {
-            id: `inline-${fileName.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "-")}`,
-            name: fileName,
-            source: "imported",
-            sourceId: resolve(name),
-            path: resolve(name),
-            sizeBytes: stat.size,
-            format: isGguf ? "gguf" : "unknown",
-            quantization: null,
-            engine: isGguf ? "llama.cpp" : null,
-            status: "discovered",
-            metadata: { tags: isGguf ? ["weights"] : ["unknown"] },
-            discoveredAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }
-        } else {
-          logger.error(`Model not found: ${name}. Provide a valid model name or file path.`)
-          process.exit(1)
+    .action(async (nameArg: string | undefined, opts: { file?: string; port: string; detach?: boolean }) => {
+      let targetFile = opts.file
+      let modelName = nameArg
+
+      // If no explicit -f flag, but positional arg points to a Homesteadfile or YAML/JSON file
+      if (!targetFile && modelName && (modelName.endsWith(".yaml") || modelName.endsWith(".yml") || modelName.endsWith(".json") || modelName.toLowerCase().includes("homesteadfile"))) {
+        if (existsSync(modelName)) {
+          targetFile = modelName
+          modelName = undefined
         }
       }
+
+      let model: ModelRecord | null = null
+
+      if (targetFile) {
+        if (!existsSync(targetFile)) {
+          logger.error(`Homesteadfile not found: ${targetFile}`)
+          process.exit(1)
+        }
+        try {
+          const spec = parseHomesteadfile(targetFile)
+          const basePath = dirname(resolve(targetFile))
+          model = homesteadfileToModelRecord(spec, basePath)
+          registry.upsert(model)
+          logger.log(`Loaded Homesteadfile "${spec.name}" (${spec.schema_version}) from ${targetFile}`)
+        } catch (err) {
+          logger.error(`Failed to load Homesteadfile at ${targetFile}: ${err instanceof Error ? err.message : String(err)}`)
+          process.exit(1)
+        }
+      } else if (modelName) {
+        model = registry.get(modelName)
+        if (!model) {
+          if (existsSync(modelName)) {
+            const stat = statSync(modelName)
+            const fileName = modelName.split("/").pop()?.replace(/\.\w+$/, "") || "model"
+            const isGguf = modelName.endsWith(".gguf")
+            model = {
+              id: `inline-${fileName.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+              name: fileName,
+              source: "imported",
+              sourceId: resolve(modelName),
+              path: resolve(modelName),
+              sizeBytes: stat.size,
+              format: isGguf ? "gguf" : "unknown",
+              quantization: null,
+              engine: isGguf ? "llama.cpp" : null,
+              status: "discovered",
+              metadata: { tags: isGguf ? ["weights"] : ["unknown"] },
+              discoveredAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }
+          } else {
+            logger.error(`Model not found: ${modelName}. Provide a valid model name, file path, or use -f <Homesteadfile>.`)
+            process.exit(1)
+          }
+        }
+      } else {
+        logger.error("Must specify a model name or provide a Homesteadfile via -f <path>")
+        process.exit(1)
+      }
+
       if (model.source === "hf-hub" && model.format === "gguf" && !/\.gguf$/i.test(model.path)) {
         const { resolveHfGgufPath } = await import("../scanners/hf-hub.js")
         const resolved = resolveHfGgufPath(model.path)
@@ -171,21 +213,21 @@ export function registerCli(program: Command): void {
 
       const tags = (model.metadata?.tags as string[]) || []
       if (tags.includes("vocab")) {
-        logger.error(`Cannot serve model "${name}": this is a vocabulary-only file, not a model with weights`)
+        logger.error(`Cannot serve model "${model.name}": this is a vocabulary-only file, not a model with weights`)
         process.exit(1)
       }
       if (tags.includes("cloud")) {
-        logger.error(`Cannot serve model "${name}": this is a cloud-only model, not available locally`)
+        logger.error(`Cannot serve model "${model.name}": this is a cloud-only model, not available locally`)
         process.exit(1)
       }
       if (tags.includes("incomplete")) {
-        logger.error(`Cannot serve model "${name}": download is incomplete (missing files)`)
+        logger.error(`Cannot serve model "${model.name}": download is incomplete (missing files)`)
         process.exit(1)
       }
 
       const engine = engineManager.selectEngine(model)
       if (!engine) {
-        logger.error(`No engine available for model ${name} (format: ${model.format})`)
+        logger.error(`No engine available for model ${model.name} (format: ${model.format})`)
         process.exit(1)
       }
       logger.log(`Starting ${model.name} via ${engine.name} on port ${opts.port}...`)
@@ -195,7 +237,7 @@ export function registerCli(program: Command): void {
         logger.log(`  Serving at ${proc.endpoint}`)
         logger.log(`  PID: ${proc.pid}`)
         if (opts.detach) {
-          logger.log(`  Detached. Use 'homestead stop ${name}' to stop.`)
+          logger.log(`  Detached. Use 'homestead stop ${model.name}' to stop.`)
           process.exit(0)
         }
       } catch (err) {
@@ -203,6 +245,65 @@ export function registerCli(program: Command): void {
         process.exit(1)
       }
     })
+
+  program
+    .command("init-manifest")
+    .description("Generate a template Homesteadfile manifest")
+    .argument("[path]", "Path to output Homesteadfile", "Homesteadfile.yaml")
+    .option("-n, --name <name>", "Model/fleet name", "HomeCoder-Q4")
+    .option("-o, --overwrite", "Overwrite existing file")
+    .action(async (targetPath: string, opts: { name: string; overwrite?: boolean }) => {
+      const filePath = resolve(targetPath)
+      if (existsSync(filePath) && !opts.overwrite) {
+        logger.error(`File already exists: ${filePath}. Use --overwrite to overwrite.`)
+        process.exit(1)
+      }
+      const spec = generateDefaultHomesteadfile({ name: opts.name })
+      const yamlStr = serializeHomesteadfile(spec)
+      writeFileSync(filePath, yamlStr, "utf-8")
+      logger.log(`\n  ✓ Generated Homesteadfile manifest at ${filePath}`)
+      logger.log(`    Model: ${spec.name} (${spec.base.source} -> ${spec.base.id})`)
+      logger.log(`    Serve with: homestead serve -f ${targetPath}\n`)
+    })
+
+  const manifestCmd = program
+    .command("manifest")
+    .description("Manage and inspect Homesteadfile manifests")
+
+  manifestCmd
+    .command("validate <path>")
+    .description("Validate a Homesteadfile against the specification")
+    .action((filePath: string) => {
+      try {
+        const spec = parseHomesteadfile(filePath)
+        logger.log(`\n  ✓ Valid Homesteadfile: ${spec.name} (schema: ${spec.schema_version})`)
+        logger.log(`    Base: ${spec.base.source}:${spec.base.id} [${spec.base.quantization || "unquantized"}]`)
+        logger.log(`    Engine: ${spec.engine?.preferred || "auto"}`)
+        if (spec.adapters?.length) {
+          logger.log(`    Adapters: ${spec.adapters.map((a) => a.name).join(", ")}`)
+        }
+        if (spec.fleet_arbitrage) {
+          logger.log(`    Fleet Arbitrage: primary=${spec.fleet_arbitrage.primary?.tier || "none"}, escalation=${spec.fleet_arbitrage.escalation?.tier || "none"}`)
+        }
+      } catch (err) {
+        logger.error(`Validation failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+        process.exit(1)
+      }
+    })
+
+  manifestCmd
+    .command("inspect <path>")
+    .description("Parse and output Homesteadfile as JSON")
+    .action((filePath: string) => {
+      try {
+        const spec = parseHomesteadfile(filePath)
+        logger.log(JSON.stringify(spec, null, 2))
+      } catch (err) {
+        logger.error(`Failed to inspect ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+        process.exit(1)
+      }
+    })
+
 
   program
     .command("stop")
