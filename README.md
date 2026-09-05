@@ -30,6 +30,13 @@ homestead serve model-name  # Serve any model on :8080
 homestead ui         # Launch the web dashboard
 ```
 
+## Try it on Colab
+
+No GPU, no local install — [`examples/colab/`](./examples/colab/) has runnable
+Google Colab notebooks that serve Liquid LFM2.5 (and comparable small models)
+through Homestead on a free T4 GPU, including a multi-model tool-calling
+leaderboard. Open a notebook, pick T4, run all cells.
+
 ## Features
 
 - **Zero-config discovery** — finds models in Ollama, HuggingFace cache, GGUF
