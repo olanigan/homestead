@@ -20,7 +20,9 @@
     ".": "./dist/types.js",
     "./registry": "./dist/core/registry.js",
     "./hf-download": "./dist/core/hf-download.js",
-    "./homesteadfile": "./dist/core/homesteadfile.js"
+    "./homesteadfile": "./dist/core/homesteadfile.js",
+    "./s1": "./dist/s1/index.js",
+    "./sdk": "./dist/sdk/s1-client.js"
   },
   "scripts": {
     "build": "npm run build:ui && tsc",

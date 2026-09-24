@@ -211,3 +211,8 @@ export interface Homesteadfile {
   observability?: HomesteadfileObservability
 }
 
+// ---------------------------------------------------------------------------
+// S1 (System-1) Type Exports
+// ---------------------------------------------------------------------------
+export * from "./s1/types.js"
+
