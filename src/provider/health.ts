@@ -5,7 +5,7 @@ export function createHealthRoutes(registry: Registry, version: string): Hono {
   const app = new Hono()
   const startTime = Date.now()
 
-  app.get("/health", (c) => {
+  const healthHandler = (c: any) => {
     const stats = registry.stats()
     return c.json({
       status: "ok",
@@ -14,7 +14,10 @@ export function createHealthRoutes(registry: Registry, version: string): Hono {
       models_serving: stats.servingCount,
       uptime_sec: Math.floor((Date.now() - startTime) / 1000),
     })
-  })
+  }
+
+  app.get("/health", healthHandler)
+  app.get("/v1/health", healthHandler)
 
   return app
 }

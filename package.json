@@ -19,7 +19,9 @@
   "exports": {
     ".": "./dist/types.js",
     "./registry": "./dist/core/registry.js",
-    "./hf-download": "./dist/core/hf-download.js"
+    "./hf-download": "./dist/core/hf-download.js",
+    "./provider": "./dist/provider/homestead.js",
+    "./systemone": "./dist/provider/systemone.js"
   },
   "scripts": {
     "build": "npm run build:ui && tsc",

@@ -15,6 +15,14 @@ export async function serveUi(
   const app = new Hono()
 
   app.route("/v1", createProviderApp(registry))
+  app.get("/health", (c) => {
+    const stats = registry.stats()
+    return c.json({
+      status: "ok",
+      models_available: stats.totalModels,
+      models_serving: stats.servingCount,
+    })
+  })
   const uiDir = join(import.meta.dir, "../../dist/ui")
 
   app.get("/api/models", (c) => {

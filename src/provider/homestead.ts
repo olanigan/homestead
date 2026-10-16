@@ -7,6 +7,7 @@ import { createModelRoutes } from "./models.js"
 import { createChatRoutes } from "./chat.js"
 import { createCompletionsRoutes } from "./completions.js"
 import { createHealthRoutes } from "./health.js"
+import { createSystemOneRoutes } from "./systemone.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const { version: VERSION } = JSON.parse(
@@ -20,6 +21,7 @@ export function createProviderApp(registry: Registry): Hono {
   app.route("/", createChatRoutes(registry))
   app.route("/", createCompletionsRoutes(registry))
   app.route("/", createHealthRoutes(registry, VERSION))
+  app.route("/", createSystemOneRoutes(registry))
 
   return app
 }
