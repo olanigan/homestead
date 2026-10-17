@@ -47,7 +47,7 @@ export interface S1ModelManifest {
 // Known Canonical Manifests & Fallbacks
 // ============================================================================
 
-const CANONICAL_AGENTIC_OPTIONS = [
+export const CANONICAL_AGENTIC_OPTIONS = [
   "read",
   "bash",
   "view_file",
@@ -60,7 +60,20 @@ const CANONICAL_AGENTIC_OPTIONS = [
   "tier_local",
 ]
 
-const CANONICAL_SERVICE_OPTIONS = [
+export const CANONICAL_AGENTIC_CRITERIA: Record<string, string> = {
+  read: "Inspect local file contents or configuration files",
+  bash: "Execute shell commands, test suites, or terminal scripts",
+  view_file: "Inspect workspace project file or AST tree",
+  tier_frontier: "Escalate to frontier reasoning model for complex architecture",
+  edit_file: "Modify or patch source file",
+  write: "Create new file on filesystem",
+  grep_search: "Search regex patterns across files or server logs",
+  run_command: "Execute workspace tools",
+  tier_cloud: "Cloud model tier escalation",
+  tier_local: "Local fast model tier",
+}
+
+export const CANONICAL_SERVICE_OPTIONS = [
   "ask-the-oracle",
   "enter-details",
   "instructions",
@@ -92,6 +105,35 @@ const CANONICAL_SERVICE_OPTIONS = [
   "validate-purchase",
   "verify-identity",
 ]
+
+export const CANONICAL_SERVICE_CRITERIA: Record<string, string> = {
+  "offer-refund": "Customer was charged incorrectly, double charged, or requests refund",
+  "shipping-status": "Inquire about shipment, tracking, delivery status, or carrier",
+  "verify-identity": "Authentication, security credentials, 2FA, or identity verification",
+  "update-order": "Modify order, change size, color, item, or shipping address",
+  "search-policy": "Warranty, return window, terms, policy guidelines",
+  "promo-code": "Discount, promo coupon, voucher application at checkout",
+  "make-password": "Reset, change, or create account password",
+  "pull-up-account": "Retrieve customer account profile or history",
+  "record-reason": "Log customer cancellation or return reason",
+  "notify-team": "Escalate or notify specialized support tier",
+  "make-purchase": "Complete checkout or buy merchandise",
+  "membership": "Loyalty program or membership status",
+  "enter-details": "Provide billing or shipping details",
+  "log-out-in": "Sign out and sign back into account",
+  "search-pricing": "Pricing inquiry or quote",
+  "search-faq": "Frequently asked questions",
+  "select-faq": "Select relevant FAQ article",
+  "send-link": "Send URL link to customer",
+  "subscription-status": "Check recurring subscription status",
+  "try-again": "Retry failed operation",
+  "update-account": "Update account profile or email",
+  "validate-purchase": "Validate transaction or receipt",
+  "ask-the-oracle": "Internal knowledge base query",
+  "search-timing": "Operating hours or store timing",
+  "search-membership": "Membership perks and benefits",
+  "instructions": "General instructions or guide",
+}
 
 const manifestCache = new Map<string, S1ModelManifest>()
 
@@ -283,261 +325,225 @@ export function normalizeDistribution<T extends string>(rawScores: Record<T, num
 }
 
 // ============================================================================
-// Single Forward-Pass Decision Evaluator
+// Single Forward-Pass Silicon Decision Engine (Ollama MLX Native)
 // ============================================================================
 
-const STOPWORDS = new Set([
-  "a", "an", "the", "and", "or", "in", "on", "at", "to", "for", "with", "by", "from",
-  "is", "are", "was", "were", "be", "been", "of", "it", "this", "that", "these", "those",
-  "what", "which", "who", "whom", "where", "when", "why", "how",
-])
+/**
+ * Resolves the underlying physical silicon Ollama model tag.
+ */
+export function resolveTargetOllamaModel(
+  requestedModel: string,
+  stateStr: string,
+  manifest: S1ModelManifest
+): string {
+  const norm = requestedModel.trim().toLowerCase()
 
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9_\-\s]/g, " ")
-    .split(/\s+/)
-    .filter((t) => t.length > 1 && !STOPWORDS.has(t))
+  if (norm === "s1/homerouter-service-420m" || norm.includes("service") || norm.includes("support")) {
+    return "s1/homerouter-service-420m"
+  }
+
+  if (norm === "s1/homerouter-agentic-420m" || norm.includes("agentic") || norm.includes("coder") || norm.includes("dev")) {
+    return "s1/homerouter-agentic-420m"
+  }
+
+  // Dual homerouter automatic resolution based on manifest options and state context
+  if (norm.includes("homerouter") || norm.includes("hrouter") || norm === "local") {
+    const isAgenticState =
+      /(\bcat\b|\bgrep\b|\bbun\b|\bnpm\b|\bpytest\b|\btest\b|\bcompile\b|\bterminal\b|\bsocket\b|\bport\b|\barchitect\b|\bconsensus\b|\bfile\b|\bsrc\/|\bpath\b)/i.test(
+        stateStr
+      ) ||
+      (manifest.options && manifest.options.some((o) => CANONICAL_AGENTIC_OPTIONS.includes(o)))
+
+    return isAgenticState ? "s1/homerouter-agentic-420m" : "s1/homerouter-service-420m"
+  }
+
+  return requestedModel
 }
 
 /**
- * Evaluates a choice decision question across provided options or manifest defaults.
+ * Executes a single-forward-pass System-1 decision on physical silicon via Ollama's /v1/systemone MLX runner.
+ * No JavaScript keyword heuristics or simulated scoring fallbacks.
  */
-function evaluateChoiceQuestion(
+export async function executeSiliconSystemOne(
+  requestedModel: string,
   stateStr: string,
-  question: S1QuestionDef,
+  questionsMap: Record<string, S1QuestionDef>,
   manifest: S1ModelManifest
-) {
-  // Extract candidate options
-  let optionEntries: Array<{ key: string; description: string }> = []
+): Promise<{ answers: Record<string, unknown>; usage: { input_tokens: number; output_tokens: number } }> {
+  const targetModel = resolveTargetOllamaModel(requestedModel, stateStr, manifest)
 
-  if (question.criteria && typeof question.criteria === "object" && !Array.isArray(question.criteria)) {
-    optionEntries = Object.entries(question.criteria).map(([k, v]) => ({
-      key: k,
-      description: typeof v === "string" ? v : k,
-    }))
-  } else if (Array.isArray(question.criteria)) {
-    optionEntries = question.criteria.map((k) => ({ key: String(k), description: String(k) }))
-  } else if (question.options && typeof question.options === "object" && !Array.isArray(question.options)) {
-    optionEntries = Object.entries(question.options).map(([k, v]) => ({
-      key: k,
-      description: typeof v === "string" ? v : k,
-    }))
-  } else if (Array.isArray(question.options)) {
-    optionEntries = question.options.map((k) => ({ key: String(k), description: String(k) }))
-  } else if (manifest.options && manifest.options.length > 0) {
-    optionEntries = manifest.options.map((k) => ({ key: k, description: k }))
-  } else {
-    optionEntries = CANONICAL_AGENTIC_OPTIONS.map((k) => ({ key: k, description: k }))
-  }
+  const ollamaQuestions: Record<string, any> = {}
 
-  const stateLower = stateStr.toLowerCase()
-  const stateTokens = new Set(tokenize(stateStr))
-  const rawScores: Record<string, number> = {}
+  for (const [key, qDef] of Object.entries(questionsMap)) {
+    if (qDef.type === "choice") {
+      let criteria: Record<string, string> = {}
+      const getDesc = (opt: string) =>
+        CANONICAL_AGENTIC_CRITERIA[opt] || CANONICAL_SERVICE_CRITERIA[opt] || opt
 
-  for (const opt of optionEntries) {
-    const keyLower = opt.key.toLowerCase()
-    const descLower = opt.description.toLowerCase()
-    const optTokens = tokenize(`${opt.key} ${opt.description}`)
+      if (qDef.criteria && typeof qDef.criteria === "object" && !Array.isArray(qDef.criteria)) {
+        for (const [k, v] of Object.entries(qDef.criteria)) {
+          criteria[k] = typeof v === "string" && v !== k ? v : getDesc(k)
+        }
+      } else if (Array.isArray(qDef.criteria)) {
+        for (const k of qDef.criteria) {
+          criteria[String(k)] = getDesc(String(k))
+        }
+      } else if (qDef.options && typeof qDef.options === "object" && !Array.isArray(qDef.options)) {
+        for (const [k, v] of Object.entries(qDef.options)) {
+          criteria[k] = typeof v === "string" && v !== k ? v : getDesc(k)
+        }
+      } else if (Array.isArray(qDef.options)) {
+        for (const k of qDef.options) {
+          criteria[String(k)] = getDesc(String(k))
+        }
+      } else if (manifest.options && manifest.options.length > 0) {
+        for (const k of manifest.options) {
+          criteria[k] = getDesc(k)
+        }
+      } else {
+        for (const k of CANONICAL_AGENTIC_OPTIONS) {
+          criteria[k] = getDesc(k)
+        }
+      }
 
-    let score = 0.5 // base uniform prior
+      // Ollama MLX runner requires between 2 and 26 candidates
+      const entries = Object.entries(criteria)
+      if (entries.length > 26) {
+        const stateLower = stateStr.toLowerCase()
+        const sortedEntries = entries.sort((a, b) => {
+          const aMatch = stateLower.includes(a[0].toLowerCase().replace(/-/g, " ")) ? 1 : 0
+          const bMatch = stateLower.includes(b[0].toLowerCase().replace(/-/g, " ")) ? 1 : 0
+          if (aMatch !== bMatch) return bMatch - aMatch
+          // Drop granular shopping garment searches when prioritizing core service actions
+          const aGarment = /^(search-(boots|jacket|jeans|shirt))$/.test(a[0]) ? 1 : 0
+          const bGarment = /^(search-(boots|jacket|jeans|shirt))$/.test(b[0]) ? 1 : 0
+          return aGarment - bGarment
+        })
+        criteria = Object.fromEntries(sortedEntries.slice(0, 26))
+      } else if (entries.length < 2) {
+        criteria["other"] = "other"
+      }
 
-    // 1. Direct key match in state
-    if (stateLower.includes(keyLower) || keyLower.split(/[-_]/).every((w) => stateLower.includes(w))) {
-      score += 4.5
-    }
+      ollamaQuestions[key] = {
+        type: "choice",
+        instructions: qDef.instructions || qDef.prompt || `Select candidate for ${key}`,
+        criteria,
+      }
+    } else if (qDef.type === "noul") {
+      let criteria: Record<string, string> = {
+        true: "Affirmative or positive indication",
+        false: "Negative or absent indication",
+      }
 
-    // 2. Multi-Agent & Developer Tooling Specific Affinities
-    if (keyLower === "grep_search" && (stateLower.includes("grep") || stateLower.includes("search regex") || stateLower.includes("econnrefused"))) {
-      score += 5.5
-    }
-    if (keyLower === "read" && (stateLower.includes("cat ") || stateLower.includes("pyproject.toml") || stateLower.includes("read ") || stateLower.includes("inspect local file"))) {
-      score += 5.0
-    }
-    if (keyLower === "view_file" && (stateLower.includes("view_file") || stateLower.includes("workspace project file"))) {
-      score += 4.5
-    }
-    if (keyLower === "bash" && (stateLower.includes("bun test") || stateLower.includes("npm test") || stateLower.includes("pytest") || stateLower.includes("run the full test suite") || stateLower.includes("shell"))) {
-      score += 5.5
-    }
-    if (keyLower === "tier_frontier" && (stateLower.includes("consensus") || stateLower.includes("architect") || stateLower.includes("high-frequency") || stateLower.includes("complex reasoning") || stateLower.includes("escalat"))) {
-      score += 6.0
-    }
-    if (keyLower === "edit_file" && (stateLower.includes("edit") || stateLower.includes("patch") || stateLower.includes("replace_file"))) {
-      score += 4.5
-    }
-    if (keyLower === "write" && (stateLower.includes("write_to_file") || stateLower.includes("create new file"))) {
-      score += 4.5
-    }
+      if (qDef.criteria && typeof qDef.criteria === "object" && !Array.isArray(qDef.criteria)) {
+        const c = qDef.criteria as { true?: unknown; false?: unknown }
+        if (c.true !== undefined && c.false !== undefined) {
+          criteria = {
+            true: String(c.true),
+            false: String(c.false),
+          }
+        }
+      }
 
-    // 3. Clinical & Healthcare FHIR Resource Affinities
-    if (keyLower === "observation" && (stateLower.includes("blood pressure") || stateLower.includes("heart rate") || stateLower.includes("vitals") || stateLower.includes("bpm") || stateLower.includes("mmhg"))) {
-      score += 6.0
-    }
-    if (keyLower === "appointment" && (stateLower.includes("schedule") || stateLower.includes("visit") || stateLower.includes("appointment") || stateLower.includes("booking") || stateLower.includes("tuesday"))) {
-      score += 6.0
-    }
-    if (keyLower === "medicationrequest" && (stateLower.includes("prescribe") || stateLower.includes("lisinopril") || stateLower.includes("tablet") || stateLower.includes("oral") || stateLower.includes("dose") || stateLower.includes("10mg"))) {
-      score += 6.0
-    }
-    if (keyLower === "diagnosticreport" && (stateLower.includes("fluttering") || stateLower.includes("arrhythmia") || stateLower.includes("palpitations") || stateLower.includes("diagnostic") || stateLower.includes("cardiologist") || stateLower.includes("imaging"))) {
-      score += 5.5
-    }
+      ollamaQuestions[key] = {
+        type: "noul",
+        instructions: qDef.instructions || qDef.prompt || `Evaluate condition for ${key}`,
+        criteria,
+      }
+    } else if (qDef.type === "score") {
+      let criteria: string[] = ["1", "2", "3", "4", "5"]
+      if (Array.isArray(qDef.criteria) && qDef.criteria.length >= 2) {
+        criteria = qDef.criteria.map(String).slice(0, 10)
+      } else if (Array.isArray(qDef.levels) && qDef.levels.length >= 2) {
+        criteria = qDef.levels.map(String).slice(0, 10)
+      }
 
-    // 4. Customer Service Triage (ASAPP ABCD v1.1) Specific Affinities
-    if (keyLower === "offer-refund" && (stateLower.includes("refund") || stateLower.includes("double charged") || stateLower.includes("charge") || stateLower.includes("overcharged"))) {
-      score += 6.0
-    }
-    if (keyLower === "shipping-status" && (stateLower.includes("package") || stateLower.includes("tracking") || stateLower.includes("delivered") || stateLower.includes("transit") || stateLower.includes("carrier") || stateLower.includes("shipping"))) {
-      score += 6.0
-    }
-    if (keyLower === "verify-identity" && (stateLower.includes("password") || stateLower.includes("login") || stateLower.includes("credential") || stateLower.includes("security question") || stateLower.includes("auth") || stateLower.includes("2fa"))) {
-      score += 6.0
-    }
-    if (keyLower === "update-order" && (stateLower.includes("modify order") || stateLower.includes("change order") || stateLower.includes("wrong item") || stateLower.includes("damaged"))) {
-      score += 5.5
-    }
-    if (keyLower === "promo-code" && (stateLower.includes("promo") || stateLower.includes("discount") || stateLower.includes("coupon") || stateLower.includes("voucher"))) {
-      score += 5.5
-    }
-    if (keyLower === "search-policy" && (stateLower.includes("policy") || stateLower.includes("return window") || stateLower.includes("warranty") || stateLower.includes("terms"))) {
-      score += 5.5
-    }
-
-    // 5. Token & Substring Overlap
-    for (const token of optTokens) {
-      if (stateTokens.has(token)) {
-        score += 1.2
-      } else if (stateLower.includes(token)) {
-        score += 0.8
+      ollamaQuestions[key] = {
+        type: "score",
+        instructions: qDef.instructions || qDef.prompt || `Rate level for ${key}`,
+        criteria,
       }
     }
-
-    rawScores[opt.key] = score
   }
 
-  const temperature = manifest.calibration?.temperature || 0.9384
-  const norm = normalizeDistribution(rawScores, temperature)
+  const ollamaHost = process.env.OLLAMA_HOST || process.env.OLLAMA_API_URL || "http://127.0.0.1:11434"
+  const ollamaUrl = `${ollamaHost.replace(/\/+$/, "")}/v1/systemone`
 
-  return {
-    type: "choice" as const,
-    choice: norm.topChoice,
-    confidence: norm.confidence,
-    probabilities: norm.probabilities,
-    entropy: norm.entropy,
-  }
-}
-
-/**
- * Evaluates a binary noul decision question.
- */
-function evaluateNoulQuestion(
-  stateStr: string,
-  question: S1QuestionDef,
-  manifest: S1ModelManifest
-) {
-  const stateLower = stateStr.toLowerCase()
-  const instrLower = (question.instructions || question.prompt || "").toLowerCase()
-
-  let logit = 0.0
-
-  // Healthcare / safety risk detection
-  const isSafetyQuestion =
-    instrLower.includes("safety") ||
-    instrLower.includes("physician") ||
-    instrLower.includes("risk") ||
-    instrLower.includes("ambiguity") ||
-    instrLower.includes("uncertain")
-
-  if (isSafetyQuestion) {
-    const riskIndicators = [
-      "vague", "fluttering", "arrhythmia", "palpitations", "uncertain", "ambiguous",
-      "abnormal", "critical", "severe", "emergency", "chest pain", "shortness of breath",
-      "possibly", "suspected", "rule out",
-    ]
-    const routineIndicators = [
-      "resting", "normal", "routine", "stable", "standardized", "follow-up",
-      "145/95", "120/80", "daily oral", "tablet",
-    ]
-
-    let riskCount = 0
-    for (const r of riskIndicators) {
-      if (stateLower.includes(r)) riskCount++
-    }
-
-    let routineCount = 0
-    for (const r of routineIndicators) {
-      if (stateLower.includes(r)) routineCount++
-    }
-
-    if (riskCount > 0) {
-      logit = 1.2 + riskCount * 0.9
-    } else if (routineCount > 0) {
-      logit = -2.4 - routineCount * 0.4
-    } else {
-      logit = -1.2
-    }
-  } else {
-    // General proposition evaluation
-    const stateTokens = tokenize(stateStr)
-    const promptTokens = tokenize(instrLower)
-    let overlap = 0
-    for (const t of promptTokens) {
-      if (stateTokens.includes(t)) overlap++
-    }
-    logit = (overlap / Math.max(1, promptTokens.length) - 0.5) * 3.0
-  }
-
-  const temperature = manifest.calibration?.temperature || 0.9384
-  const prob = 1 / (1 + Math.exp(-logit / temperature))
-  const roundedProb = Math.round(prob * 10000) / 10000
-  const verdict = roundedProb >= 0.50
-
-  return {
-    type: "noul" as const,
-    noul: roundedProb,
-    verdict,
-    raw_logit: Math.round(logit * 10000) / 10000,
-  }
-}
-
-/**
- * Evaluates an ordinal score question.
- */
-function evaluateScoreQuestion(
-  stateStr: string,
-  question: S1QuestionDef,
-  manifest: S1ModelManifest
-) {
-  const levels = (question.levels || question.criteria || [1, 2, 3, 4, 5]) as Array<string | number>
-  const rawScores: Record<string, number> = {}
-
-  const stateTokens = tokenize(stateStr)
-  levels.forEach((lvl, idx) => {
-    const lvlKey = String(lvl)
-    rawScores[lvlKey] = 1.0 + Math.sin(stateTokens.length + idx) * 0.5
+  const resp = await fetch(ollamaUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: targetModel,
+      state: stateStr,
+      questions: ollamaQuestions,
+    }),
   })
 
-  const temperature = manifest.calibration?.temperature || 0.9384
-  const norm = normalizeDistribution(rawScores, temperature)
-
-  // Calculate probability-weighted expected score
-  let expectedScore = 0
-  levels.forEach((lvl) => {
-    const numericVal = typeof lvl === "number" ? lvl : parseFloat(lvl) || 0
-    expectedScore += numericVal * (norm.probabilities[String(lvl)] || 0)
-  })
-
-  const roundedScore = Math.round(expectedScore * 10000) / 10000
-
-  return {
-    type: "score" as const,
-    score: roundedScore,
-    expected_score: roundedScore,
-    confidence: norm.confidence,
-    probabilities: norm.probabilities,
-    levels,
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => "")
+    throw new Error(`Ollama physical silicon execution failed [${resp.status}]: ${errText}`)
   }
+
+  const data = (await resp.json()) as any
+
+  const answers: Record<string, unknown> = {}
+  for (const [key, qDef] of Object.entries(questionsMap)) {
+    const ans = data.answers?.[key]
+    if (!ans) continue
+
+    if (qDef.type === "choice") {
+      let probabilities = ans.probabilities || {}
+      let topChoice = ans.choice
+      let confidence = ans.confidence ?? 0.0
+      let entropy = ans.entropy
+
+      if (Object.keys(probabilities).length > 0) {
+        const norm = normalizeDistribution(probabilities, 1.0)
+        probabilities = norm.probabilities
+        topChoice = ans.choice || norm.topChoice
+        confidence = ans.confidence !== undefined ? ans.confidence : norm.confidence
+        entropy = norm.entropy
+      }
+
+      answers[key] = {
+        type: "choice",
+        choice: topChoice,
+        confidence: Math.round(confidence * 10000) / 10000,
+        probabilities,
+        entropy: entropy !== undefined ? Math.round(entropy * 10000) / 10000 : undefined,
+      }
+    } else if (qDef.type === "noul") {
+      const noulVal = typeof ans.noul === "number" ? Math.round(ans.noul * 10000) / 10000 : 0.0
+      const threshold = manifest.calibration?.recommended_threshold ?? 0.50
+      const verdict = noulVal >= threshold
+      answers[key] = {
+        type: "noul",
+        noul: noulVal,
+        verdict,
+        confidence: Math.round(Math.abs(noulVal - 0.5) * 2 * 10000) / 10000,
+      }
+    } else if (qDef.type === "score") {
+      answers[key] = {
+        type: "score",
+        score: typeof ans.score === "number" ? Math.round(ans.score * 10000) / 10000 : ans.score,
+        expected_score: typeof ans.score === "number" ? Math.round(ans.score * 10000) / 10000 : ans.score,
+        confidence: typeof ans.confidence === "number" ? Math.round(ans.confidence * 10000) / 10000 : 0.0,
+        probabilities: ans.probabilities,
+        legend: ans.legend,
+        levels: qDef.levels || qDef.criteria || [1, 2, 3, 4, 5],
+      }
+    }
+  }
+
+  const inputTokens = data.usage?.input_tokens ?? Math.max(1, Math.ceil(stateStr.length / 4))
+  const usage = {
+    input_tokens: inputTokens,
+    output_tokens: 0,
+    inputTokens,
+    outputTokens: 0,
+  }
+
+  return { answers, usage }
 }
 
 // ============================================================================
@@ -590,50 +596,51 @@ export function createSystemOneRoutes(registry: Registry): Hono {
       Object.assign(questionsMap, body.questions)
     }
 
+    // Validate each question definition
+    for (const [key, qDef] of Object.entries(questionsMap)) {
+      if (!qDef || typeof qDef !== "object" || !qDef.type) {
+        return errorResponse(c, 400, `Question '${key}' is missing required 'type' field`, "invalid_request_error", "invalid_question")
+      }
+      if (qDef.type !== "choice" && qDef.type !== "noul" && qDef.type !== "score") {
+        return errorResponse(c, 400, `Unsupported question type: ${(qDef as any).type}`, "invalid_request_error", "unsupported_question_type")
+      }
+    }
+
     // Resolve model manifest and calibration
     const manifest = resolveModelManifest(body.model, registry)
 
     // Stringify state for processing
     const stateStr = typeof body.state === "string" ? body.state : JSON.stringify(body.state)
 
-    // Execute decision evaluation across questions
-    const answers: Record<string, unknown> = {}
-    for (const [key, qDef] of Object.entries(questionsMap)) {
-      if (!qDef || typeof qDef !== "object" || !qDef.type) {
-        return errorResponse(c, 400, `Question '${key}' is missing required 'type' field`, "invalid_request_error", "invalid_question")
-      }
-
-      switch (qDef.type) {
-        case "choice":
-          answers[key] = evaluateChoiceQuestion(stateStr, qDef, manifest)
-          break
-        case "noul":
-          answers[key] = evaluateNoulQuestion(stateStr, qDef, manifest)
-          break
-        case "score":
-          answers[key] = evaluateScoreQuestion(stateStr, qDef, manifest)
-          break
-        default:
-          return errorResponse(c, 400, `Unsupported question type: ${(qDef as any).type}`, "invalid_request_error", "unsupported_question_type")
-      }
+    // Execute real silicon forward pass on Ollama
+    let siliconResult: { answers: Record<string, unknown>; usage: { input_tokens: number; output_tokens: number } }
+    try {
+      siliconResult = await executeSiliconSystemOne(body.model, stateStr, questionsMap, manifest)
+    } catch (err: any) {
+      return errorResponse(
+        c,
+        503,
+        `System-1 silicon execution failed: ${err?.message || String(err)}`,
+        "server_error",
+        "ollama_silicon_error"
+      )
     }
 
     // Compute execution telemetry
     const elapsed = performance.now() - startTime
     const latency_ms = Math.max(0.12, Math.round(elapsed * 100) / 100)
 
-    const inputTokens = Math.max(1, Math.ceil(stateStr.length / 4))
     const usage = {
-      input_tokens: inputTokens,
+      input_tokens: siliconResult.usage.input_tokens,
       output_tokens: 0,
-      inputTokens,
+      inputTokens: siliconResult.usage.input_tokens,
       outputTokens: 0,
     }
 
     return c.json({
       model: body.model,
       provider: "homestead",
-      answers,
+      answers: siliconResult.answers,
       latency_ms,
       latencyMs: latency_ms,
       usage,
