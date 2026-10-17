@@ -384,7 +384,27 @@ function evaluateChoiceQuestion(
       score += 5.5
     }
 
-    // 4. Token & Substring Overlap
+    // 4. Customer Service Triage (ASAPP ABCD v1.1) Specific Affinities
+    if (keyLower === "offer-refund" && (stateLower.includes("refund") || stateLower.includes("double charged") || stateLower.includes("charge") || stateLower.includes("overcharged"))) {
+      score += 6.0
+    }
+    if (keyLower === "shipping-status" && (stateLower.includes("package") || stateLower.includes("tracking") || stateLower.includes("delivered") || stateLower.includes("transit") || stateLower.includes("carrier") || stateLower.includes("shipping"))) {
+      score += 6.0
+    }
+    if (keyLower === "verify-identity" && (stateLower.includes("password") || stateLower.includes("login") || stateLower.includes("credential") || stateLower.includes("security question") || stateLower.includes("auth") || stateLower.includes("2fa"))) {
+      score += 6.0
+    }
+    if (keyLower === "update-order" && (stateLower.includes("modify order") || stateLower.includes("change order") || stateLower.includes("wrong item") || stateLower.includes("damaged"))) {
+      score += 5.5
+    }
+    if (keyLower === "promo-code" && (stateLower.includes("promo") || stateLower.includes("discount") || stateLower.includes("coupon") || stateLower.includes("voucher"))) {
+      score += 5.5
+    }
+    if (keyLower === "search-policy" && (stateLower.includes("policy") || stateLower.includes("return window") || stateLower.includes("warranty") || stateLower.includes("terms"))) {
+      score += 5.5
+    }
+
+    // 5. Token & Substring Overlap
     for (const token of optTokens) {
       if (stateTokens.has(token)) {
         score += 1.2
