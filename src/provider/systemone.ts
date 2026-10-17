@@ -74,65 +74,77 @@ export const CANONICAL_AGENTIC_CRITERIA: Record<string, string> = {
 }
 
 export const CANONICAL_SERVICE_OPTIONS = [
-  "ask-the-oracle",
-  "enter-details",
+  "offer-refund",
+  "shipping-status",
+  "verify-identity",
+  "update-order",
+  "search-policy",
+  "promo-code",
+  "make-password",
+  "pull-up-account",
+  "update-account",
+  "validate-purchase",
+  "notify-team",
+  "record-reason",
+  "make-purchase",
+  "subscription-status",
+  "search-pricing",
+  "search-faq",
+  "send-link",
   "instructions",
   "log-out-in",
-  "make-password",
-  "make-purchase",
-  "membership",
-  "notify-team",
-  "offer-refund",
-  "promo-code",
-  "pull-up-account",
-  "record-reason",
-  "search-boots",
-  "search-faq",
-  "search-jacket",
-  "search-jeans",
-  "search-membership",
-  "search-policy",
-  "search-pricing",
-  "search-shirt",
-  "search-timing",
-  "select-faq",
-  "send-link",
-  "shipping-status",
-  "subscription-status",
   "try-again",
-  "update-account",
-  "update-order",
-  "validate-purchase",
-  "verify-identity",
+  "enter-details",
+  "browse-catalog",
+  "greeting-faq",
+  "out-of-scope",
+  "tier-frontier",
+  "escalate-human",
 ]
 
 export const CANONICAL_SERVICE_CRITERIA: Record<string, string> = {
-  "offer-refund": "Customer was charged incorrectly, double charged, or requests refund",
-  "shipping-status": "Inquire about shipment, tracking, delivery status, or carrier",
-  "verify-identity": "Authentication, security credentials, 2FA, or identity verification",
-  "update-order": "Modify order, change size, color, item, or shipping address",
-  "search-policy": "Warranty, return window, terms, policy guidelines",
-  "promo-code": "Discount, promo coupon, voucher application at checkout",
-  "make-password": "Reset, change, or create account password",
-  "pull-up-account": "Retrieve customer account profile or history",
-  "record-reason": "Log customer cancellation or return reason",
-  "notify-team": "Escalate or notify specialized support tier",
-  "make-purchase": "Complete checkout or buy merchandise",
-  "membership": "Loyalty program or membership status",
-  "enter-details": "Provide billing or shipping details",
-  "log-out-in": "Sign out and sign back into account",
-  "search-pricing": "Pricing inquiry or quote",
-  "search-faq": "Frequently asked questions",
-  "select-faq": "Select relevant FAQ article",
-  "send-link": "Send URL link to customer",
-  "subscription-status": "Check recurring subscription status",
-  "try-again": "Retry failed operation",
-  "update-account": "Update account profile or email",
-  "validate-purchase": "Validate transaction or receipt",
-  "ask-the-oracle": "Internal knowledge base query",
-  "search-timing": "Operating hours or store timing",
-  "search-membership": "Membership perks and benefits",
-  "instructions": "General instructions or guide",
+  "offer-refund": "Customer was charged incorrectly, double charged, or requests refund or compensation",
+  "shipping-status": "Inquire about shipment, tracking, delivery status, courier, or missing package",
+  "verify-identity": "Authentication, security credentials, 2FA, OTP, or identity verification",
+  "update-order": "Modify order, change size, color, item, quantity, or shipping address",
+  "search-policy": "Warranty, return window, terms of service, policy guidelines, or return rules",
+  "promo-code": "Discount, promo coupon, voucher application at checkout, or promotional credits",
+  "make-password": "Reset, change, or create account login password",
+  "pull-up-account": "Retrieve customer account profile, transaction history, or customer record",
+  "update-account": "Update account profile, email, phone number, or contact preferences",
+  "validate-purchase": "Validate transaction, proof of purchase, order receipt, or order ID",
+  "notify-team": "Escalate or notify specialized support tier or internal department",
+  "record-reason": "Log customer cancellation reason, return reason, or feedback",
+  "make-purchase": "Complete checkout, purchase merchandise, or pay outstanding balance",
+  "subscription-status": "Check recurring subscription status, renewal date, or cancel subscription",
+  "search-pricing": "Pricing inquiry, rate card, cost calculation, plan tiers, or quotes",
+  "search-faq": "Frequently asked questions and knowledge base articles",
+  "send-link": "Send direct URL link, documentation link, or self-service link to customer",
+  "instructions": "Step-by-step guidance, setup instructions, or how-to guide",
+  "log-out-in": "Sign out and sign back into customer account",
+  "try-again": "Retry failed operation, transaction retry, or page refresh",
+  "enter-details": "Provide billing or shipping details, form filling, or address entry",
+  "browse-catalog": "Search products, browse inventory, inspect item catalog, availability, apparel, or goods",
+  "greeting-faq": "Greetings, pleasantries, small talk, thank you, who are you, or conversational chat",
+  "out-of-scope": "Unrelated topic, programming code, general world knowledge, or unanswerable query",
+  "tier-frontier": "Complex multi-step reasoning, architectural problem, or edge case escalation",
+  "escalate-human": "Customer demands live human agent, supervisor, or files formal complaint",
+}
+
+export const CANONICAL_TURN_TYPE_OPTIONS = [
+  "greeting_chitchat",
+  "faq_policy",
+  "actionable_request",
+  "escalate_human",
+  "out_of_scope",
+]
+
+export const CANONICAL_TURN_TYPE_CRITERIA: Record<string, string> = {
+  greeting_chitchat: "Customer is greeting, exchanging pleasantries, saying goodbye, or asking bot identity",
+  faq_policy: "Customer is asking informational questions about company policies, shipping rates, hours, or general FAQ",
+  actionable_request: "Customer requires a concrete backend transaction, lookup, modification, refund, or account change",
+  escalate_human: "Customer is frustrated, complaining, or explicitly demanding a human supervisor or live representative",
+  out_of_scope: "Query is unrelated to customer support, e.g. general knowledge, programming code, weather, or creative writing",
 }
 
 const manifestCache = new Map<string, S1ModelManifest>()
@@ -187,6 +199,8 @@ export function resolveModelManifest(modelName: string, registry?: Registry): S1
           const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as S1ModelManifest
           if (normalized.includes("agentic") || normalized.includes("coder") || normalized.includes("dev")) {
             parsed.options = CANONICAL_AGENTIC_OPTIONS
+          } else if (normalized.includes("service") || normalized.includes("support")) {
+            parsed.options = CANONICAL_SERVICE_OPTIONS
           }
           manifestCache.set(normalized, parsed)
           return parsed
@@ -378,9 +392,16 @@ export async function executeSiliconSystemOne(
     if (qDef.type === "choice") {
       let criteria: Record<string, string> = {}
       const getDesc = (opt: string) =>
-        CANONICAL_AGENTIC_CRITERIA[opt] || CANONICAL_SERVICE_CRITERIA[opt] || opt
+        CANONICAL_AGENTIC_CRITERIA[opt] ||
+        CANONICAL_SERVICE_CRITERIA[opt] ||
+        CANONICAL_TURN_TYPE_CRITERIA[opt] ||
+        opt
 
-      if (qDef.criteria && typeof qDef.criteria === "object" && !Array.isArray(qDef.criteria)) {
+      if ((key === "turn_type" || key === "triage_tier" || key === "meta_tier") && !qDef.criteria && !qDef.options) {
+        for (const opt of CANONICAL_TURN_TYPE_OPTIONS) {
+          criteria[opt] = CANONICAL_TURN_TYPE_CRITERIA[opt] || opt
+        }
+      } else if (qDef.criteria && typeof qDef.criteria === "object" && !Array.isArray(qDef.criteria)) {
         for (const [k, v] of Object.entries(qDef.criteria)) {
           criteria[k] = typeof v === "string" && v !== k ? v : getDesc(k)
         }
@@ -401,7 +422,7 @@ export async function executeSiliconSystemOne(
           criteria[k] = getDesc(k)
         }
       } else {
-        for (const k of CANONICAL_AGENTIC_OPTIONS) {
+        for (const k of CANONICAL_SERVICE_OPTIONS) {
           criteria[k] = getDesc(k)
         }
       }
