@@ -193,19 +193,27 @@ export function resolveModelManifest(modelName: string, registry?: Registry): S1
 
   for (const dirName of candidateDirNames) {
     for (const root of searchRoots) {
-      const manifestPath = join(root, dirName.startsWith("models/") ? dirName : `models/${dirName}`, "model.sdm", "manifest.json")
-      if (existsSync(manifestPath)) {
-        try {
-          const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as S1ModelManifest
-          if (normalized.includes("agentic") || normalized.includes("coder") || normalized.includes("dev")) {
-            parsed.options = CANONICAL_AGENTIC_OPTIONS
-          } else if (normalized.includes("service") || normalized.includes("support")) {
-            parsed.options = CANONICAL_SERVICE_OPTIONS
+      const modelDir = join(root, dirName.startsWith("models/") ? dirName : `models/${dirName}`)
+      const manifestCandidates = [
+        join(modelDir, "manifest.json"),
+        join(modelDir, "model.sdm", "manifest.json"),
+      ]
+      for (const manifestPath of manifestCandidates) {
+        if (existsSync(manifestPath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as S1ModelManifest
+            if (!parsed.options || !Array.isArray(parsed.options) || parsed.options.length === 0) {
+              if (normalized.includes("agentic") || normalized.includes("coder") || normalized.includes("dev")) {
+                parsed.options = CANONICAL_AGENTIC_OPTIONS
+              } else if (normalized.includes("service") || normalized.includes("support")) {
+                parsed.options = CANONICAL_SERVICE_OPTIONS
+              }
+            }
+            manifestCache.set(normalized, parsed)
+            return parsed
+          } catch {
+            // ignore parse error, try next
           }
-          manifestCache.set(normalized, parsed)
-          return parsed
-        } catch {
-          // ignore parse error, try next
         }
       }
     }
