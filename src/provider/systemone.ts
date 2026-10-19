@@ -346,6 +346,85 @@ export function normalizeDistribution<T extends string>(rawScores: Record<T, num
   }
 }
 
+/**
+ * Linearly normalizes an already-softmaxed probability distribution to strictly sum to 1.0000
+ * without exponentiation, preserving model confidence and accurate Shannon entropy.
+ */
+export function normalizeSimplex<T extends string>(rawProbs: Record<T, number>): {
+  probabilities: Record<T, number>
+  topChoice: T
+  confidence: number
+  entropy: number
+} {
+  const keys = Object.keys(rawProbs) as T[]
+  const firstKey = keys[0]
+  if (!firstKey) {
+    throw new Error("Cannot normalize empty distribution")
+  }
+
+  // Linear scaling without exponentiation
+  const nonNegative = keys.map((k) => Math.max(0, rawProbs[k] ?? 0))
+  const sumValues = nonNegative.reduce((acc, val) => acc + val, 0)
+  const linearProbs = sumValues > 0
+    ? nonNegative.map((v) => v / sumValues)
+    : keys.map(() => 1.0 / keys.length)
+
+  // Round to 4 decimal places
+  const roundedProbs = linearProbs.map((p) => Math.round(p * 10000) / 10000)
+  let sumRounded = roundedProbs.reduce((acc, v) => acc + v, 0)
+
+  // Find argmax
+  let maxIdx = 0
+  for (let i = 1; i < linearProbs.length; i++) {
+    const cur = linearProbs[i] ?? 0
+    const best = linearProbs[maxIdx] ?? 0
+    if (cur > best) {
+      maxIdx = i
+    }
+  }
+
+  const bestKey = keys[maxIdx] ?? firstKey
+
+  // Adjust largest probability so sum is strictly 1.0000
+  const diff = Math.round((1.0 - sumRounded) * 10000) / 10000
+  roundedProbs[maxIdx] = Math.round(((roundedProbs[maxIdx] ?? 0) + diff) * 10000) / 10000
+
+  const probabilities = {} as Record<T, number>
+  keys.forEach((k, idx) => {
+    probabilities[k] = Math.max(0.0, roundedProbs[idx] ?? 0)
+  })
+
+  // Re-verify strict 1.0000 sum
+  sumRounded = Object.values(probabilities).reduce((acc: number, v) => acc + (v as number), 0)
+  if (Math.abs(sumRounded - 1.0) > 0.0001) {
+    const finalDiff = 1.0 - sumRounded
+    probabilities[bestKey] = Math.round(((probabilities[bestKey] ?? 0) + finalDiff) * 10000) / 10000
+  }
+
+  // Entropy calculation
+  const values = Object.values(probabilities).filter((p) => (p as number) > 0) as number[]
+  const n = keys.length
+  const h = values.length > 1 ? -values.reduce((sum, p) => sum + p * Math.log(p), 0) : 0
+  const entropy = Math.round(h * 10000) / 10000
+
+  let confidence: number
+  if (n <= 1) {
+    confidence = 1.0
+  } else {
+    const normH = h / Math.log(n)
+    const entConf = Math.max(0.0, Math.min(1.0, 1.0 - normH))
+    const peakProb = probabilities[bestKey] ?? 0
+    confidence = Math.round(Math.max(entConf, peakProb >= 0.90 ? peakProb : entConf) * 10000) / 10000
+  }
+
+  return {
+    probabilities,
+    topChoice: bestKey,
+    confidence,
+    entropy,
+  }
+}
+
 // ============================================================================
 // Single Forward-Pass Silicon Decision Engine (Ollama MLX Native)
 // ============================================================================
@@ -522,12 +601,19 @@ export async function executeSiliconSystemOne(
 
     if (qDef.type === "choice") {
       let probabilities = ans.probabilities || {}
+      let logits = ans.logits || ans.raw_scores
       let topChoice = ans.choice
       let confidence = ans.confidence ?? 0.0
       let entropy = ans.entropy
 
-      if (Object.keys(probabilities).length > 0) {
-        const norm = normalizeDistribution(probabilities, 1.0)
+      if (logits && typeof logits === "object" && Object.keys(logits).length > 0) {
+        const norm = normalizeDistribution(logits, manifest.calibration?.temperature ?? 1.0)
+        probabilities = norm.probabilities
+        topChoice = ans.choice || norm.topChoice
+        confidence = ans.confidence !== undefined ? ans.confidence : norm.confidence
+        entropy = norm.entropy
+      } else if (probabilities && typeof probabilities === "object" && Object.keys(probabilities).length > 0) {
+        const norm = normalizeSimplex(probabilities)
         probabilities = norm.probabilities
         topChoice = ans.choice || norm.topChoice
         confidence = ans.confidence !== undefined ? ans.confidence : norm.confidence
@@ -552,12 +638,18 @@ export async function executeSiliconSystemOne(
         confidence: Math.round(Math.abs(noulVal - 0.5) * 2 * 10000) / 10000,
       }
     } else if (qDef.type === "score") {
+      let scoreProbs = ans.probabilities
+      if (ans.logits && typeof ans.logits === "object" && Object.keys(ans.logits).length > 0) {
+        scoreProbs = normalizeDistribution(ans.logits, manifest.calibration?.temperature ?? 1.0).probabilities
+      } else if (scoreProbs && typeof scoreProbs === "object" && Object.keys(scoreProbs).length > 0) {
+        scoreProbs = normalizeSimplex(scoreProbs).probabilities
+      }
       answers[key] = {
         type: "score",
         score: typeof ans.score === "number" ? Math.round(ans.score * 10000) / 10000 : ans.score,
         expected_score: typeof ans.score === "number" ? Math.round(ans.score * 10000) / 10000 : ans.score,
         confidence: typeof ans.confidence === "number" ? Math.round(ans.confidence * 10000) / 10000 : 0.0,
-        probabilities: ans.probabilities,
+        probabilities: scoreProbs || ans.probabilities,
         legend: ans.legend,
         levels: qDef.levels || qDef.criteria || [1, 2, 3, 4, 5],
       }
