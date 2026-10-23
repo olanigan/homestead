@@ -3,6 +3,21 @@ import { join, resolve } from "node:path"
 import { Hono, type Context } from "hono"
 import type { Registry } from "../core/registry.js"
 import { errorResponse } from "./errors.js"
+import { s1Router, globalSchemaCache } from "../s1/index.js"
+import type {
+  SystemOneRequest,
+  SystemOneResponse,
+  DecideRequest,
+  DecideResponse,
+  ScoreRequest,
+  ScoreResponse,
+  S1Question,
+  ChoiceQuestion,
+  ChoiceAnswer,
+  NoulAnswer,
+  ScoreQuestion,
+  ScoreAnswer,
+} from "../s1/types.js"
 
 // ============================================================================
 // Types & Wire Interfaces
@@ -585,7 +600,17 @@ export function createSystemOneRoutes(registry: Registry): Hono {
     }
 
     // 1. Validate model
+    const isS1ArrayRequest = Array.isArray(body.questions) && body.questions.length > 0 && Boolean((body.questions[0] as any)?.prompt)
     if (!body.model || typeof body.model !== "string") {
+      if (isS1ArrayRequest || (body as any).schema || (body as any).adapter) {
+        const modelRecord = (body as any).model ? (registry.get((body as any).model) || undefined) : undefined
+        try {
+          const response = await s1Router.evaluate(body as any, modelRecord)
+          return c.json(response)
+        } catch (err) {
+          return errorResponse(c, 500, `S1 evaluation failed: ${err instanceof Error ? err.message : String(err)}`, "server_error", "s1_evaluation_error")
+        }
+      }
       return errorResponse(c, 400, "model field is required and must be a string", "invalid_request_error", "missing_model")
     }
 
@@ -597,6 +622,17 @@ export function createSystemOneRoutes(registry: Registry): Hono {
     // 3. Validate questions
     if (!body.questions || typeof body.questions !== "object") {
       return errorResponse(c, 400, "questions field is required and must be an object or array", "invalid_request_error", "missing_questions")
+    }
+
+    // If explicit S1 adapter requested
+    if ((body as any).adapter && (body as any).adapter !== "auto") {
+      const modelRecord = registry.get(body.model) || undefined
+      try {
+        const response = await s1Router.evaluate(body as any, modelRecord)
+        return c.json(response)
+      } catch (err) {
+        return errorResponse(c, 500, `S1 evaluation failed: ${err instanceof Error ? err.message : String(err)}`, "server_error", "s1_evaluation_error")
+      }
     }
 
     // Normalize questions record
@@ -671,6 +707,163 @@ export function createSystemOneRoutes(registry: Registry): Hono {
   // Support both /v1/systemone and /systemone at route root
   app.post("/v1/systemone", systemOneHandler)
   app.post("/systemone", systemOneHandler)
+
+  // -------------------------------------------------------------------------
+  // POST /decide - Convenience Endpoint for Choice and Binary Decisions
+  // -------------------------------------------------------------------------
+  app.post("/decide", async (c) => {
+    let body: DecideRequest
+    try {
+      body = (await c.req.json()) as DecideRequest
+    } catch {
+      return errorResponse(c, 400, "Invalid JSON payload in request body", "invalid_request_error", "malformed_json")
+    }
+
+    if (body.state === undefined || body.state === null) {
+      return errorResponse(c, 400, "state field is required", "invalid_request_error", "missing_required_field")
+    }
+    if (!body.question) {
+      return errorResponse(c, 400, "question field is required", "invalid_request_error", "missing_required_field")
+    }
+
+    let q: S1Question
+    if (typeof body.question === "string") {
+      if (Array.isArray(body.options) && body.options.length >= 2) {
+        q = {
+          id: "decision",
+          type: "choice",
+          prompt: body.question,
+          options: body.options,
+          rubric: body.rubric,
+        }
+      } else {
+        q = {
+          id: "decision",
+          type: "noul",
+          prompt: body.question,
+          rubric: body.rubric,
+        }
+      }
+    } else {
+      q = body.question as S1Question
+    }
+
+    const modelRecord = body.model ? (registry.get(body.model) || undefined) : undefined
+
+    try {
+      const s1Res = await s1Router.evaluate(
+        {
+          state: body.state,
+          questions: [q],
+          model: body.model,
+          adapter: body.adapter,
+        },
+        modelRecord
+      )
+
+      const ans = s1Res.answers[q.id]
+      if (!ans) {
+        return errorResponse(c, 500, "No answer generated for decision", "server_error", "missing_answer")
+      }
+
+      if (ans.type === "choice") {
+        const ca = ans as ChoiceAnswer
+        const decideResponse: DecideResponse = {
+          decision: ca.value,
+          confidence: ca.confidence,
+          probabilities: ca.probabilities,
+          answer: ca,
+          latency_ms: s1Res.usage.latency_ms,
+        }
+        return c.json(decideResponse)
+      } else {
+        const na = ans as NoulAnswer
+        const decideResponse: DecideResponse = {
+          decision: na.value,
+          confidence: na.confidence,
+          probabilities: na.probability,
+          answer: na,
+          latency_ms: s1Res.usage.latency_ms,
+        }
+        return c.json(decideResponse)
+      }
+    } catch (err) {
+      return errorResponse(
+        c,
+        500,
+        `Decide evaluation failed: ${err instanceof Error ? err.message : String(err)}`,
+        "server_error",
+        "decide_evaluation_error"
+      )
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // POST /score - Convenience Endpoint for Score Evaluation
+  // -------------------------------------------------------------------------
+  app.post("/score", async (c) => {
+    let body: ScoreRequest
+    try {
+      body = (await c.req.json()) as ScoreRequest
+    } catch {
+      return errorResponse(c, 400, "Invalid JSON payload in request body", "invalid_request_error", "malformed_json")
+    }
+
+    if (body.state === undefined || body.state === null) {
+      return errorResponse(c, 400, "state field is required", "invalid_request_error", "missing_required_field")
+    }
+
+    const min = body.min ?? 1
+    const max = body.max ?? 5
+    const prompt = typeof body.question === "string" ? body.question : body.question?.prompt ?? "Rate the quality of the input state"
+
+    const q: ScoreQuestion = {
+      id: "scoring",
+      type: "score",
+      prompt,
+      min,
+      max,
+      levels: body.levels,
+      rubric: body.rubric,
+    }
+
+    const modelRecord = body.model ? (registry.get(body.model) || undefined) : undefined
+
+    try {
+      const s1Res = await s1Router.evaluate(
+        {
+          state: body.state,
+          questions: [q],
+          model: body.model,
+          adapter: body.adapter,
+        },
+        modelRecord
+      )
+
+      const ans = s1Res.answers[q.id] as ScoreAnswer
+      if (!ans || ans.type !== "score") {
+        return errorResponse(c, 500, "No score answer generated", "server_error", "missing_score_answer")
+      }
+
+      const scoreResponse: ScoreResponse = {
+        expected_score: ans.expected_score,
+        value: ans.value,
+        confidence: ans.confidence,
+        distribution: ans.probabilities,
+        answer: ans,
+        latency_ms: s1Res.usage.latency_ms,
+      }
+      return c.json(scoreResponse)
+    } catch (err) {
+      return errorResponse(
+        c,
+        500,
+        `Score evaluation failed: ${err instanceof Error ? err.message : String(err)}`,
+        "server_error",
+        "score_evaluation_error"
+      )
+    }
+  })
 
   // Informational GET endpoints for debugging
   app.get("/v1/systemone", (c) =>

@@ -50,11 +50,12 @@ export function getPhysicalCpuCount(): number {
 // A running process launched before metadata-derived ctx-size was known (or
 // before the model's resolved ctx-size otherwise changed) keeps serving the
 // stale value forever unless something notices the drift and respawns it.
-export function isStaleProcess(proc: ServingProcess, model: ModelRecord): boolean {
+export function isStaleProcess(proc: ServingProcess, model: ModelRecord, opts?: ServeOptions): boolean {
   if (proc.engineKind === "modal" || proc.endpoint.startsWith("https://")) {
     return false
   }
-  return proc.ctxSize !== undefined && proc.ctxSize !== resolveCtxSize(model)
+  const targetCtx = opts?.ctxSize ?? resolveCtxSize(model)
+  return proc.ctxSize !== undefined && proc.ctxSize !== targetCtx
 }
 
 function resolveLlamaBin(): { bin: string; args: string[] } | null {
@@ -313,7 +314,7 @@ export class LlamaCppAdapter implements EngineAdapter {
   async serve(model: ModelRecord, port: number, opts?: ServeOptions): Promise<ServingProcess> {
     const existing = runningProcesses.get(model.id)
     if (existing) {
-      if (!isStaleProcess(existing, model)) return existing
+      if (!isStaleProcess(existing, model, opts)) return existing
       await this.stop(existing)
     } else {
       const existingLocal = this.processes.get(model.id)
@@ -347,7 +348,7 @@ export class LlamaCppAdapter implements EngineAdapter {
     const resolved = resolveLlamaBin()
     this.resolved = resolved ?? this.resolved
 
-    const ctxSize = resolveCtxSize(model)
+    const ctxSize = opts?.ctxSize ?? resolveCtxSize(model)
     const argv: string[] = [
       ...this.resolved.args,
       "--model", modelPath,

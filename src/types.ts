@@ -35,6 +35,7 @@ export interface ServeOptions {
   cacheTypeV?: string
   parallel?: number
   draftModel?: string
+  ctxSize?: number
 }
 
 export interface EngineAdapter {
@@ -147,9 +148,32 @@ export interface HomesteadfileHardwareMatrix {
   [key: string]: unknown
 }
 
+export interface HomesteadfileTuning {
+  threads?: number
+  gpu_layers?: number
+  gpuLayers?: number
+  batch_size?: number
+  batchSize?: number
+  ubatch_size?: number
+  ubatchSize?: number
+  flash_attn?: boolean
+  flashAttn?: boolean
+  cache_type_k?: string
+  cacheTypeK?: string
+  cache_type_v?: string
+  cacheTypeV?: string
+  parallel?: number
+  draft_model?: string
+  draftModel?: string
+  ctx_size?: number
+  ctxSize?: number
+  [key: string]: unknown
+}
+
 export interface HomesteadfileEngine {
   preferred?: HomesteadfileEnginePreferred
   hardware_matrix?: HomesteadfileHardwareMatrix
+  tuning?: HomesteadfileTuning
 }
 
 export interface HomesteadfileFleetArbitrageTrigger {

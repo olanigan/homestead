@@ -6,6 +6,7 @@ import {
   parseHomesteadfile,
   validateHomesteadfile,
   homesteadfileToModelRecord,
+  homesteadfileTuningToServeOptions,
   serializeHomesteadfile,
   generateDefaultHomesteadfile,
 } from "../../src/core/homesteadfile.js"
@@ -42,6 +43,16 @@ engine:
       - "rocm"
       - "cpu"
     cpu_fallback: true
+  tuning:
+    flash_attn: true
+    threads: 4
+    gpu_layers: 99
+    batch_size: 1024
+    ubatch_size: 256
+    cache_type_k: "f16"
+    cache_type_v: "f16"
+    parallel: 1
+    ctx_size: 8192
 
 fleet_arbitrage:
   primary:
@@ -106,6 +117,12 @@ observability:
       expect(spec.adapters?.[0].name).toBe("homecoder-grpo-reasoning")
       expect(spec.engine?.preferred).toBe("llama.cpp")
       expect(spec.engine?.hardware_matrix?.gpu_min_vram_gb).toBe(8)
+      expect(spec.engine?.tuning?.flash_attn).toBe(true)
+      expect(spec.engine?.tuning?.threads).toBe(4)
+      expect(spec.engine?.tuning?.batch_size).toBe(1024)
+      expect(spec.engine?.tuning?.ubatch_size).toBe(256)
+      expect(spec.engine?.tuning?.gpu_layers).toBe(99)
+      expect(spec.engine?.tuning?.ctx_size).toBe(8192)
       expect(spec.fleet_arbitrage?.primary?.tier).toBe("local-llama-cpp")
       expect(spec.fleet_arbitrage?.escalation?.triggers?.timeout_seconds).toBe(30)
       expect(spec.system_contract?.reasoning?.open_tag).toBe("<think>")
@@ -290,18 +307,139 @@ observability:
   })
 
   describe("generateDefaultHomesteadfile", () => {
-    it("generates a complete valid default Homesteadfile", () => {
+    it("generates a complete valid default Homesteadfile with tuning defaults", () => {
       const def = generateDefaultHomesteadfile()
       expect(def.schema_version).toBe("v1")
       expect(def.name).toBe("HomeCoder-Q4")
       expect(def.base.source).toBe("hf-hub")
       expect(def.adapters?.length).toBeGreaterThan(0)
       expect(def.engine?.hardware_matrix).toBeDefined()
+      expect(def.engine?.tuning?.flash_attn).toBe(true)
+      expect(def.engine?.tuning?.threads).toBe(4)
+      expect(def.engine?.tuning?.batch_size).toBe(1024)
+      expect(def.engine?.tuning?.ubatch_size).toBe(256)
       expect(def.fleet_arbitrage?.primary).toBeDefined()
       expect(def.fleet_arbitrage?.escalation).toBeDefined()
       expect(def.fleet_arbitrage?.fallback).toBeDefined()
       expect(def.system_contract?.reasoning).toBeDefined()
       expect(def.observability?.composite_verifier).toBeDefined()
+    })
+  })
+
+  describe("Declarative Inference Performance Tuning Knobs", () => {
+    it("parses tuning knobs in snake_case and maps to ServeOptions", () => {
+      const yaml = `
+schema_version: "v1"
+name: "Tuned-Model"
+base:
+  source: "gguf-file"
+  id: "model.gguf"
+engine:
+  preferred: "llama.cpp"
+  tuning:
+    threads: 8
+    gpu_layers: 33
+    batch_size: 2048
+    ubatch_size: 512
+    flash_attn: true
+    cache_type_k: "q8_0"
+    cache_type_v: "q4_0"
+    parallel: 4
+    draft_model: "draft.gguf"
+    ctx_size: 16384
+`
+      const spec = parseHomesteadfile(yaml)
+      expect(spec.engine?.tuning).toBeDefined()
+      expect(spec.engine?.tuning?.threads).toBe(8)
+      expect(spec.engine?.tuning?.gpu_layers).toBe(33)
+      expect(spec.engine?.tuning?.batch_size).toBe(2048)
+      expect(spec.engine?.tuning?.ubatch_size).toBe(512)
+      expect(spec.engine?.tuning?.flash_attn).toBe(true)
+      expect(spec.engine?.tuning?.cache_type_k).toBe("q8_0")
+      expect(spec.engine?.tuning?.cache_type_v).toBe("q4_0")
+      expect(spec.engine?.tuning?.parallel).toBe(4)
+      expect(spec.engine?.tuning?.draft_model).toBe("draft.gguf")
+      expect(spec.engine?.tuning?.ctx_size).toBe(16384)
+
+      const serveOpts = homesteadfileTuningToServeOptions(spec.engine?.tuning)
+      expect(serveOpts.threads).toBe(8)
+      expect(serveOpts.gpuLayers).toBe(33)
+      expect(serveOpts.batchSize).toBe(2048)
+      expect(serveOpts.ubatchSize).toBe(512)
+      expect(serveOpts.flashAttn).toBe(true)
+      expect(serveOpts.cacheTypeK).toBe("q8_0")
+      expect(serveOpts.cacheTypeV).toBe("q4_0")
+      expect(serveOpts.parallel).toBe(4)
+      expect(serveOpts.draftModel).toBe("draft.gguf")
+      expect(serveOpts.ctxSize).toBe(16384)
+    })
+
+    it("parses tuning knobs in camelCase and maps to ServeOptions", () => {
+      const spec: Homesteadfile = {
+        schema_version: "v1",
+        name: "Camel-Model",
+        base: { source: "gguf-file", id: "model.gguf" },
+        engine: {
+          preferred: "llama.cpp",
+          tuning: {
+            threads: 6,
+            gpuLayers: 40,
+            batchSize: 1024,
+            ubatchSize: 256,
+            flashAttn: false,
+            cacheTypeK: "f16",
+            cacheTypeV: "f16",
+            parallel: 2,
+            draftModel: "speculative.gguf",
+            ctxSize: 4096,
+          },
+        },
+      }
+      const validated = validateHomesteadfile(spec)
+      expect(validated.engine?.tuning?.gpuLayers).toBe(40)
+      const serveOpts = homesteadfileTuningToServeOptions(validated.engine?.tuning)
+      expect(serveOpts.threads).toBe(6)
+      expect(serveOpts.gpuLayers).toBe(40)
+      expect(serveOpts.batchSize).toBe(1024)
+      expect(serveOpts.ubatchSize).toBe(256)
+      expect(serveOpts.flashAttn).toBe(false)
+      expect(serveOpts.cacheTypeK).toBe("f16")
+      expect(serveOpts.cacheTypeV).toBe("f16")
+      expect(serveOpts.parallel).toBe(2)
+      expect(serveOpts.draftModel).toBe("speculative.gguf")
+      expect(serveOpts.ctxSize).toBe(4096)
+    })
+
+    it("rejects invalid negative values for tuning fields", () => {
+      const invalidSpec = {
+        schema_version: "v1",
+        name: "Invalid-Tuning",
+        base: { source: "gguf-file", id: "model.gguf" },
+        engine: {
+          preferred: "llama.cpp",
+          tuning: {
+            threads: -4,
+          },
+        },
+      }
+      expect(() => validateHomesteadfile(invalidSpec)).toThrow()
+    })
+
+    it("attaches tuning and serve_options to ModelRecord metadata", () => {
+      const spec = generateDefaultHomesteadfile()
+      const record = homesteadfileToModelRecord(spec)
+      expect(record.metadata.tuning).toBeDefined()
+      expect(record.metadata.serve_options).toBeDefined()
+      const serveOpts = record.metadata.serve_options as any
+      expect(serveOpts.flashAttn).toBe(true)
+      expect(serveOpts.threads).toBe(4)
+      expect(serveOpts.batchSize).toBe(1024)
+      expect(serveOpts.ubatchSize).toBe(256)
+    })
+
+    it("returns empty ServeOptions when tuning is undefined", () => {
+      const serveOpts = homesteadfileTuningToServeOptions(undefined)
+      expect(serveOpts).toEqual({})
     })
   })
 })

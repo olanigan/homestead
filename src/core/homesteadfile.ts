@@ -8,11 +8,13 @@ import type {
   HomesteadfileBase,
   HomesteadfileAdapter,
   HomesteadfileEngine,
+  HomesteadfileTuning,
   HomesteadfileFleetArbitrage,
   HomesteadfileSystemContract,
   HomesteadfileObservability,
   ModelRecord,
   EngineKind,
+  ServeOptions,
 } from "../types.js"
 
 // ---------------------------------------------------------------------------
@@ -42,9 +44,33 @@ export const HomesteadfileHardwareMatrixSchema = z
   })
   .passthrough()
 
+export const HomesteadfileTuningSchema = z
+  .object({
+    threads: z.number().int().positive().optional(),
+    gpu_layers: z.number().int().nonnegative().optional(),
+    gpuLayers: z.number().int().nonnegative().optional(),
+    batch_size: z.number().int().positive().optional(),
+    batchSize: z.number().int().positive().optional(),
+    ubatch_size: z.number().int().positive().optional(),
+    ubatchSize: z.number().int().positive().optional(),
+    flash_attn: z.boolean().optional(),
+    flashAttn: z.boolean().optional(),
+    cache_type_k: z.string().optional(),
+    cacheTypeK: z.string().optional(),
+    cache_type_v: z.string().optional(),
+    cacheTypeV: z.string().optional(),
+    parallel: z.number().int().positive().optional(),
+    draft_model: z.string().optional(),
+    draftModel: z.string().optional(),
+    ctx_size: z.number().int().positive().optional(),
+    ctxSize: z.number().int().positive().optional(),
+  })
+  .passthrough()
+
 export const HomesteadfileEngineSchema = z.object({
   preferred: z.enum(["auto", "llama.cpp", "mlx", "ollama", "modal"]).optional(),
   hardware_matrix: HomesteadfileHardwareMatrixSchema.optional(),
+  tuning: HomesteadfileTuningSchema.optional(),
 })
 
 export const HomesteadfileFleetArbitrageTriggerSchema = z
@@ -169,6 +195,45 @@ export function parseHomesteadfile(contentOrPath: string): Homesteadfile {
 }
 
 /**
+ * Convert declarative Homesteadfile tuning knobs (snake_case or camelCase)
+ * into typed ServeOptions for runtime engine adapters.
+ */
+export function homesteadfileTuningToServeOptions(tuning?: HomesteadfileTuning): ServeOptions {
+  if (!tuning) return {}
+  const opts: ServeOptions = {}
+
+  if (tuning.threads !== undefined) opts.threads = tuning.threads
+
+  const gpuLayers = tuning.gpu_layers ?? tuning.gpuLayers
+  if (gpuLayers !== undefined) opts.gpuLayers = gpuLayers
+
+  const batchSize = tuning.batch_size ?? tuning.batchSize
+  if (batchSize !== undefined) opts.batchSize = batchSize
+
+  const ubatchSize = tuning.ubatch_size ?? tuning.ubatchSize
+  if (ubatchSize !== undefined) opts.ubatchSize = ubatchSize
+
+  const flashAttn = tuning.flash_attn ?? tuning.flashAttn
+  if (flashAttn !== undefined) opts.flashAttn = flashAttn
+
+  const cacheTypeK = tuning.cache_type_k ?? tuning.cacheTypeK
+  if (cacheTypeK !== undefined) opts.cacheTypeK = cacheTypeK
+
+  const cacheTypeV = tuning.cache_type_v ?? tuning.cacheTypeV
+  if (cacheTypeV !== undefined) opts.cacheTypeV = cacheTypeV
+
+  if (tuning.parallel !== undefined) opts.parallel = tuning.parallel
+
+  const draftModel = tuning.draft_model ?? tuning.draftModel
+  if (draftModel !== undefined) opts.draftModel = draftModel
+
+  const ctxSize = tuning.ctx_size ?? tuning.ctxSize
+  if (ctxSize !== undefined) opts.ctxSize = ctxSize
+
+  return opts
+}
+
+/**
  * Convert a parsed Homesteadfile specification into a Homestead ModelRecord.
  */
 export function homesteadfileToModelRecord(spec: Homesteadfile, basePath?: string): ModelRecord {
@@ -225,6 +290,8 @@ export function homesteadfileToModelRecord(spec: Homesteadfile, basePath?: strin
     fleet_arbitrage: spec.fleet_arbitrage,
     observability: spec.observability,
     hardware_matrix: spec.engine?.hardware_matrix,
+    tuning: spec.engine?.tuning,
+    serve_options: homesteadfileTuningToServeOptions(spec.engine?.tuning),
   }
 
   return {
@@ -287,6 +354,13 @@ export function generateDefaultHomesteadfile(overrides?: Partial<Homesteadfile>)
         cuda_compute_capability: "sm_70",
         supported_accelerators: ["metal", "cuda", "rocm", "cpu"],
         cpu_fallback: true,
+      },
+      tuning: {
+        flash_attn: true,
+        threads: 4,
+        batch_size: 1024,
+        ubatch_size: 256,
+        gpu_layers: 99,
       },
     },
     fleet_arbitrage: {

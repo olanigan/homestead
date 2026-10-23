@@ -27,6 +27,17 @@ engine:
       - "rocm"
       - "cpu"
     cpu_fallback: true
+  tuning:
+    # Declarative inference performance knobs
+    flash_attn: true
+    threads: 4
+    gpu_layers: 99
+    batch_size: 1024
+    ubatch_size: 256
+    cache_type_k: "f16"
+    cache_type_v: "f16"
+    parallel: 1
+    ctx_size: 8192
 
 fleet_arbitrage:
   primary:

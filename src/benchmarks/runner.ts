@@ -1,10 +1,22 @@
 import { existsSync, statSync } from "node:fs"
-import { resolve } from "node:path"
+import { resolve, dirname } from "node:path"
 import { createServer, type AddressInfo } from "node:net"
 import { LlamaCppAdapter } from "../engines/index.js"
 import { ObsDb } from "../observability/db.js"
 import type { ModelRecord, ServeOptions } from "../types.js"
 import type { BenchmarkRecord } from "../observability/types.js"
+
+export interface BenchmarkOptions {
+  targetFile?: string
+  modelPath?: string
+  suites?: Array<{
+    suite: string
+    label: string
+    serveOpts: ServeOptions
+    prompt: string
+    maxTokens: number
+  }>
+}
 
 function freePort(): Promise<number> {
   return new Promise((res, rej) => {
@@ -108,40 +120,82 @@ async function executeCompletion(
   }
 }
 
-export async function runBenchmarks(): Promise<BenchmarkRecord[]> {
+export async function runBenchmarks(options?: BenchmarkOptions): Promise<BenchmarkRecord[]> {
   const db = new ObsDb()
-  const candidatePaths = [
-    resolve(process.cwd(), ".ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf"),
-    resolve(process.cwd(), "localai-harness/homestead/.ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf"),
-    resolve(import.meta.dir, "../../.ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf"),
-  ]
 
-  const modelPath = candidatePaths.find((p) => existsSync(p))
-  if (!modelPath) {
-    throw new Error(`Benchmark model SmolLM2-135M-Instruct-Q3_K_M.gguf not found in candidate paths.`)
+  let model: ModelRecord | null = null
+  let manifestServeOpts: ServeOptions | null = null
+
+  if (options?.targetFile) {
+    const target = resolve(options.targetFile)
+    if (!existsSync(target)) {
+      throw new Error(`Target file not found for benchmark: ${target}`)
+    }
+    if (target.endsWith(".yaml") || target.endsWith(".yml") || target.toLowerCase().includes("homesteadfile")) {
+      const { parseHomesteadfile, homesteadfileToModelRecord, homesteadfileTuningToServeOptions } = await import("../core/homesteadfile.js")
+      const spec = parseHomesteadfile(target)
+      const basePath = dirname(target)
+      model = homesteadfileToModelRecord(spec, basePath)
+      if (spec.engine?.tuning) {
+        manifestServeOpts = homesteadfileTuningToServeOptions(spec.engine.tuning)
+      }
+    } else {
+      model = {
+        id: "custom-bench-model",
+        name: target.split("/").pop()?.replace(/\.\w+$/, "") || "CustomModel",
+        source: "gguf-file",
+        sourceId: target,
+        path: target,
+        sizeBytes: statSync(target).size,
+        format: "gguf",
+        quantization: null,
+        engine: "llama.cpp",
+        status: "discovered",
+        metadata: { tags: ["weights"] },
+        discoveredAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+    }
   }
 
-  const model: ModelRecord = {
-    id: "smollm2-135m-instruct",
-    name: "SmolLM2-135M-Instruct-Q3_K_M",
-    source: "gguf-file",
-    sourceId: modelPath,
-    path: modelPath,
-    sizeBytes: statSync(modelPath).size,
-    format: "gguf",
-    quantization: "Q3_K_M",
-    engine: "llama.cpp",
-    status: "discovered",
-    metadata: { tags: ["weights"], parameter_count: "135M" },
-    discoveredAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+  if (!model) {
+    const candidatePaths = [
+      options?.modelPath,
+      resolve(process.cwd(), ".ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf"),
+      resolve(process.cwd(), "localai-harness/homestead/.ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf"),
+      resolve(import.meta.dir, "../../.ci/models/SmolLM2-135M-Instruct-Q3_K_M.gguf"),
+    ].filter(Boolean) as string[]
+
+    const modelPath = candidatePaths.find((p) => existsSync(p))
+    if (!modelPath) {
+      throw new Error(`Benchmark model SmolLM2-135M-Instruct-Q3_K_M.gguf not found in candidate paths.`)
+    }
+
+    model = {
+      id: "smollm2-135m-instruct",
+      name: "SmolLM2-135M-Instruct-Q3_K_M",
+      source: "gguf-file",
+      sourceId: modelPath,
+      path: modelPath,
+      sizeBytes: statSync(modelPath).size,
+      format: "gguf",
+      quantization: "Q3_K_M",
+      engine: "llama.cpp",
+      status: "discovered",
+      metadata: { tags: ["weights"], parameter_count: "135M" },
+      discoveredAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
   }
 
   console.log(`\n========================================================================`)
   console.log(`🚀 HOMESTEAD INFERENCE BENCHMARK RUNNER`)
-  console.log(`Model: ${model.name} (${model.metadata?.parameter_count}, ${model.quantization})`)
-  console.log(`Path:  ${modelPath}`)
+  console.log(`Model: ${model.name} (${model.metadata?.parameter_count || model.format}, ${model.quantization || "unquantized"})`)
+  console.log(`Path:  ${model.path}`)
   console.log(`DB:    ${process.env.HOMESTEAD_OBS_DB_PATH || "default SQLite obs.db"}`)
+  if (manifestServeOpts) {
+    console.log(`Tuning: ${JSON.stringify(manifestServeOpts)}`)
+  }
   console.log(`========================================================================\n`)
 
   const testSuites: Array<{
@@ -150,7 +204,18 @@ export async function runBenchmarks(): Promise<BenchmarkRecord[]> {
     serveOpts: ServeOptions
     prompt: string
     maxTokens: number
-  }> = [
+  }> = options?.suites ?? [
+    ...(manifestServeOpts
+      ? [
+          {
+            suite: "Homesteadfile Tuning Manifest",
+            label: `Configured Knobs (${model.name})`,
+            serveOpts: { ...manifestServeOpts },
+            prompt: "Explain why quantum computing matters in two concise sentences.",
+            maxTokens: 48,
+          },
+        ]
+      : []),
     // ----------------------------------------------------
     // Set 1: Flash Attention & Context Scaling
     // ----------------------------------------------------
@@ -304,7 +369,8 @@ export async function runBenchmarks(): Promise<BenchmarkRecord[]> {
 }
 
 if (import.meta.main) {
-  runBenchmarks()
+  const targetFile = process.argv[2]
+  runBenchmarks(targetFile ? { targetFile } : undefined)
     .then(() => process.exit(0))
     .catch((err) => {
       console.error("Benchmark runner failed:", err)

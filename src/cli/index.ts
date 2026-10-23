@@ -1,13 +1,14 @@
 import { existsSync, statSync, writeFileSync } from "node:fs"
 import { resolve, dirname } from "node:path"
 import { Command } from "commander"
-import type { ModelSource, ModelRecord, ServingProcess } from "../types.js"
+import type { ModelSource, ModelRecord, ServingProcess, ServeOptions } from "../types.js"
 import { Registry } from "../core/registry.js"
 import { discoverAll } from "../core/scanner.js"
 import { engineManager } from "../engines/index.js"
 import {
   parseHomesteadfile,
   homesteadfileToModelRecord,
+  homesteadfileTuningToServeOptions,
   generateDefaultHomesteadfile,
   serializeHomesteadfile,
 } from "../core/homesteadfile.js"
@@ -139,7 +140,35 @@ export function registerCli(program: Command): void {
     .option("-f, --file <path>", "Path to Homesteadfile")
     .option("-p, --port <port>", "Port to serve on", "8080")
     .option("-d, --detach", "Detach after the server is healthy and exit the CLI")
-    .action(async (nameArg: string | undefined, opts: { file?: string; port: string; detach?: boolean }) => {
+    .option("-t, --threads <threads>", "Number of CPU threads for inference")
+    .option("--ngl, --gpu-layers <layers>", "Number of layers to offload to GPU/Metal")
+    .option("-b, --batch-size <size>", "Prompt batch size")
+    .option("-u, --ubatch-size <size>", "Physical micro-batch size")
+    .option("--flash-attn", "Enable Flash Attention")
+    .option("--no-flash-attn", "Disable Flash Attention")
+    .option("--cache-type-k <type>", "KV cache quantization type for K (f16, q8_0, q4_0, etc.)")
+    .option("--cache-type-v <type>", "KV cache quantization type for V (f16, q8_0, q4_0, etc.)")
+    .option("--parallel <parallel>", "Number of parallel request slots")
+    .option("--draft-model <path>", "Path to draft model for speculative decoding")
+    .option("-c, --ctx-size <size>", "Context window size in tokens")
+    .action(async (
+      nameArg: string | undefined,
+      opts: {
+        file?: string
+        port: string
+        detach?: boolean
+        threads?: string
+        gpuLayers?: string
+        batchSize?: string
+        ubatchSize?: string
+        flashAttn?: boolean
+        cacheTypeK?: string
+        cacheTypeV?: string
+        parallel?: string
+        draftModel?: string
+        ctxSize?: string
+      }
+    ) => {
       let targetFile = opts.file
       let modelName = nameArg
 
@@ -151,7 +180,18 @@ export function registerCli(program: Command): void {
         }
       }
 
+      // If neither targetFile nor modelName is provided, check for default Homesteadfile in cwd
+      if (!targetFile && !modelName) {
+        for (const candidate of ["Homesteadfile.yaml", "Homesteadfile.yml", "Homesteadfile"]) {
+          if (existsSync(candidate)) {
+            targetFile = candidate
+            break
+          }
+        }
+      }
+
       let model: ModelRecord | null = null
+      let manifestTuning: ServeOptions = {}
 
       if (targetFile) {
         if (!existsSync(targetFile)) {
@@ -163,6 +203,7 @@ export function registerCli(program: Command): void {
           const basePath = dirname(resolve(targetFile))
           model = homesteadfileToModelRecord(spec, basePath)
           registry.upsert(model)
+          manifestTuning = homesteadfileTuningToServeOptions(spec.engine?.tuning)
           logger.log(`Loaded Homesteadfile "${spec.name}" (${spec.schema_version}) from ${targetFile}`)
         } catch (err) {
           logger.error(`Failed to load Homesteadfile at ${targetFile}: ${err instanceof Error ? err.message : String(err)}`)
@@ -170,6 +211,9 @@ export function registerCli(program: Command): void {
         }
       } else if (modelName) {
         model = registry.get(modelName)
+        if (model?.metadata?.tuning) {
+          manifestTuning = homesteadfileTuningToServeOptions(model.metadata.tuning as any)
+        }
         if (!model) {
           if (existsSync(modelName)) {
             const stat = statSync(modelName)
@@ -230,9 +274,25 @@ export function registerCli(program: Command): void {
         logger.error(`No engine available for model ${model.name} (format: ${model.format})`)
         process.exit(1)
       }
+
+      const serveOptions: ServeOptions = {
+        detach: opts.detach,
+        ...manifestTuning,
+      }
+      if (opts.threads !== undefined) serveOptions.threads = parseInt(opts.threads, 10)
+      if (opts.gpuLayers !== undefined) serveOptions.gpuLayers = parseInt(opts.gpuLayers, 10)
+      if (opts.batchSize !== undefined) serveOptions.batchSize = parseInt(opts.batchSize, 10)
+      if (opts.ubatchSize !== undefined) serveOptions.ubatchSize = parseInt(opts.ubatchSize, 10)
+      if (opts.flashAttn !== undefined) serveOptions.flashAttn = opts.flashAttn
+      if (opts.cacheTypeK !== undefined) serveOptions.cacheTypeK = opts.cacheTypeK
+      if (opts.cacheTypeV !== undefined) serveOptions.cacheTypeV = opts.cacheTypeV
+      if (opts.parallel !== undefined) serveOptions.parallel = parseInt(opts.parallel, 10)
+      if (opts.draftModel !== undefined) serveOptions.draftModel = opts.draftModel
+      if (opts.ctxSize !== undefined) serveOptions.ctxSize = parseInt(opts.ctxSize, 10)
+
       logger.log(`Starting ${model.name} via ${engine.name} on port ${opts.port}...`)
       try {
-        const proc = await engine.serve(model, parseInt(opts.port), { detach: opts.detach })
+        const proc = await engine.serve(model, parseInt(opts.port), serveOptions)
         registry.updateStatus(model.id, "serving")
         logger.log(`  Serving at ${proc.endpoint}`)
         logger.log(`  PID: ${proc.pid}`)
@@ -282,6 +342,10 @@ export function registerCli(program: Command): void {
         if (spec.adapters?.length) {
           logger.log(`    Adapters: ${spec.adapters.map((a) => a.name).join(", ")}`)
         }
+        if (spec.engine?.tuning) {
+          const t = spec.engine.tuning
+          logger.log(`    Tuning: flash_attn=${t.flash_attn ?? t.flashAttn ?? "auto"}, threads=${t.threads ?? "auto"}, batch=${t.batch_size ?? t.batchSize ?? "auto"}, ubatch=${t.ubatch_size ?? t.ubatchSize ?? "auto"}`)
+        }
         if (spec.fleet_arbitrage) {
           logger.log(`    Fleet Arbitrage: primary=${spec.fleet_arbitrage.primary?.tier || "none"}, escalation=${spec.fleet_arbitrage.escalation?.tier || "none"}`)
         }
@@ -300,6 +364,22 @@ export function registerCli(program: Command): void {
         logger.log(JSON.stringify(spec, null, 2))
       } catch (err) {
         logger.error(`Failed to inspect ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
+        process.exit(1)
+      }
+    })
+
+  program
+    .command("bench")
+    .description("Run inference performance benchmarks and log metrics to SQLite")
+    .argument("[path]", "Optional Homesteadfile or model file to benchmark")
+    .option("-f, --file <path>", "Path to Homesteadfile or model GGUF to benchmark")
+    .action(async (pathArg: string | undefined, opts: { file?: string }) => {
+      const targetFile = opts.file || pathArg
+      const { runBenchmarks } = await import("../benchmarks/runner.js")
+      try {
+        await runBenchmarks(targetFile ? { targetFile } : undefined)
+      } catch (err) {
+        logger.error(`Benchmark failed: ${err instanceof Error ? err.message : String(err)}`)
         process.exit(1)
       }
     })
