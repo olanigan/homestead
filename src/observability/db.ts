@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite"
 import { join } from "node:path"
 import { mkdirSync, existsSync } from "node:fs"
 import { homedir } from "node:os"
-import type { ServingEventEnvelope, ServingSession, ObsStats, ServingEventPayload, ServingEventType } from "./types.js"
+import type { ServingEventEnvelope, ServingSession, ObsStats, ServingEventPayload, ServingEventType, BenchmarkRecord } from "./types.js"
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -33,10 +33,32 @@ CREATE TABLE IF NOT EXISTS events (
   FOREIGN KEY (session_id) REFERENCES sessions(session_id)
 );
 
+CREATE TABLE IF NOT EXISTS benchmarks (
+  id             TEXT PRIMARY KEY,
+  suite          TEXT NOT NULL,
+  model_id       TEXT NOT NULL,
+  model_name     TEXT NOT NULL,
+  label          TEXT NOT NULL,
+  config_json    TEXT NOT NULL,
+  workload_json  TEXT NOT NULL,
+  prompt_tokens  INTEGER,
+  output_tokens  INTEGER,
+  total_tokens   INTEGER,
+  ttft_ms        REAL,
+  prompt_tps     REAL,
+  completion_tps REAL,
+  total_ms       REAL,
+  status         TEXT NOT NULL DEFAULT 'completed',
+  created_at     TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_obs_events_session_seq ON events(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_obs_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_obs_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_obs_events_model ON events(model_id);
+CREATE INDEX IF NOT EXISTS idx_benchmarks_suite ON benchmarks(suite);
+CREATE INDEX IF NOT EXISTS idx_benchmarks_model ON benchmarks(model_id);
+CREATE INDEX IF NOT EXISTS idx_benchmarks_created ON benchmarks(created_at);
 `
 
 function defaultDbPath(): string {
@@ -195,6 +217,88 @@ export class ObsDb {
     }
   }
 
+  insertBenchmark(record: BenchmarkRecord): boolean {
+    try {
+      this.db.run(`
+        INSERT OR REPLACE INTO benchmarks
+          (id, suite, model_id, model_name, label, config_json, workload_json, prompt_tokens, output_tokens, total_tokens, ttft_ms, prompt_tps, completion_tps, total_ms, status, created_at)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        record.id,
+        record.suite,
+        record.model_id,
+        record.model_name,
+        record.label,
+        JSON.stringify(record.config),
+        JSON.stringify(record.workload),
+        record.prompt_tokens ?? null,
+        record.output_tokens ?? null,
+        record.total_tokens ?? null,
+        record.ttft_ms ?? null,
+        record.prompt_tps ?? null,
+        record.completion_tps ?? null,
+        record.total_ms,
+        record.status,
+        record.created_at,
+      ])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  getBenchmarks(filter?: { suite?: string; model_id?: string; limit?: number }): BenchmarkRecord[] {
+    const conditions: string[] = []
+    const params: Record<string, unknown> = {}
+    if (filter?.suite) {
+      conditions.push("suite = $suite")
+      params.$suite = filter.suite
+    }
+    if (filter?.model_id) {
+      conditions.push("model_id = $model_id")
+      params.$model_id = filter.model_id
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : ""
+    const limit = filter?.limit ?? 100
+    params.$limit = limit
+
+    const q = this.db.query(`
+      SELECT id, suite, model_id, model_name, label, config_json, workload_json, prompt_tokens, output_tokens, total_tokens, ttft_ms, prompt_tps, completion_tps, total_ms, status, created_at
+      FROM benchmarks
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $limit
+    `)
+    const rows = q.all(params as any) as RawBenchmarkRow[]
+    return rows.map((r) => ({
+      id: r.id,
+      suite: r.suite,
+      model_id: r.model_id,
+      model_name: r.model_name,
+      label: r.label,
+      config: JSON.parse(r.config_json),
+      workload: JSON.parse(r.workload_json),
+      prompt_tokens: r.prompt_tokens ?? undefined,
+      output_tokens: r.output_tokens ?? undefined,
+      total_tokens: r.total_tokens ?? undefined,
+      ttft_ms: r.ttft_ms ?? undefined,
+      prompt_tps: r.prompt_tps ?? undefined,
+      completion_tps: r.completion_tps ?? undefined,
+      total_ms: r.total_ms,
+      status: r.status as "completed" | "failed",
+      created_at: r.created_at,
+    }))
+  }
+
+  deleteBenchmarks(suite?: string): void {
+    if (suite) {
+      this.db.run("DELETE FROM benchmarks WHERE suite = ?", [suite])
+    } else {
+      this.db.run("DELETE FROM benchmarks")
+    }
+  }
+
   close(): void {
     this.db.close()
   }
@@ -228,4 +332,23 @@ interface RawEventRow {
   pool: string
   tags_json: string
   payload_json: string
+}
+
+interface RawBenchmarkRow {
+  id: string
+  suite: string
+  model_id: string
+  model_name: string
+  label: string
+  config_json: string
+  workload_json: string
+  prompt_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  ttft_ms: number | null
+  prompt_tps: number | null
+  completion_tps: number | null
+  total_ms: number
+  status: string
+  created_at: string
 }

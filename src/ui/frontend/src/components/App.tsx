@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useModels, useStatus, useDiscover } from "../hooks"
 import type { ModelRecord } from "../types"
 import ObservabilityPanel from "./ObservabilityPanel.js"
+import BenchmarkPanel from "./BenchmarkPanel.js"
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B"
@@ -196,7 +197,7 @@ export default function App() {
   const [filterSource, setFilterSource] = useState<string | null>(null)
   const [filterTag, setFilterTag] = useState<string | null>(null)
   const [search, setSearch] = useState("")
-  const [tab, setTab] = useState<"models" | "obs">("models")
+  const [tab, setTab] = useState<"models" | "obs" | "benchmarks">("models")
 
   const sources = [...new Set(models.map((m) => m.source))].sort()
   const allTags = [...new Set(models.flatMap((m) => getTags(m)))].sort()
@@ -237,6 +238,12 @@ export default function App() {
           borderBottom: tab === "obs" ? "2px solid #4f46e5" : "2px solid transparent",
           marginBottom: -2,
         }}>Observability</button>
+        <button onClick={() => setTab("benchmarks")} style={{
+          padding: "8px 20px", fontSize: 14, fontWeight: 500, border: "none", cursor: "pointer",
+          backgroundColor: "transparent", color: tab === "benchmarks" ? "#4f46e5" : "#6b7280",
+          borderBottom: tab === "benchmarks" ? "2px solid #4f46e5" : "2px solid transparent",
+          marginBottom: -2,
+        }}>Benchmarks</button>
       </div>
 
       {tab === "models" ? (
@@ -257,8 +264,10 @@ export default function App() {
             <ModelGrid models={filtered} />
           )}
         </>
-      ) : (
+      ) : tab === "obs" ? (
         <ObservabilityPanel />
+      ) : (
+        <BenchmarkPanel />
       )}
     </div>
   )

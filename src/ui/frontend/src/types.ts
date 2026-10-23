@@ -82,3 +82,22 @@ export interface ServingEvent {
   tags: string[]
   payload: Record<string, unknown>
 }
+
+export interface BenchmarkRecord {
+  id: string
+  suite: string
+  model_id: string
+  model_name: string
+  label: string
+  config: Record<string, unknown>
+  workload: Record<string, unknown>
+  prompt_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+  ttft_ms?: number
+  prompt_tps?: number
+  completion_tps?: number
+  total_ms: number
+  status: "completed" | "failed"
+  created_at: string
+}

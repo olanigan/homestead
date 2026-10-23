@@ -100,6 +100,29 @@ export async function serveUi(
     return c.json(globalEmitter.getDb().getRecentEvents(100))
   })
 
+  app.get("/api/benchmarks", (c) => {
+    const suite = c.req.query("suite")
+    const modelId = c.req.query("model_id")
+    const limit = parseInt(c.req.query("limit") || "100", 10)
+    return c.json(globalEmitter.getDb().getBenchmarks({ suite, model_id: modelId, limit }))
+  })
+
+  app.post("/api/benchmarks", async (c) => {
+    try {
+      const record = await c.req.json()
+      const ok = globalEmitter.getDb().insertBenchmark(record)
+      return c.json({ success: ok }, ok ? 201 : 400)
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  app.delete("/api/benchmarks", (c) => {
+    const suite = c.req.query("suite")
+    globalEmitter.getDb().deleteBenchmarks(suite)
+    return c.json({ deleted: true })
+  })
+
   app.get("/api/obs/stream", (c) => {
     const filterPool = c.req.query("pool")
     const filterTag = c.req.query("tag")
