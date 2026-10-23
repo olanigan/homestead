@@ -1,7 +1,7 @@
 import { spawn, execSync } from "node:child_process"
 import { createInterface } from "node:readline"
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { homedir, cpus, platform } from "node:os"
 import { join, resolve } from "node:path"
 import { createServer } from "node:net"
 import type { ModelRecord, EngineAdapter, ServingProcess, EngineStatus, StreamEvent, ChatOptions, ServeOptions } from "../types.js"
@@ -36,6 +36,15 @@ export function resolveCtxSize(model: ModelRecord): number {
     return Math.min(metaCtx, MAX_CTX_SIZE)
   }
   return DEFAULT_CTX_SIZE
+}
+
+export function getPhysicalCpuCount(): number {
+  const logical = cpus()
+  if (!logical || logical.length === 0) return 4
+  if (platform() === "darwin") {
+    return logical.length
+  }
+  return Math.max(1, Math.floor(logical.length / 2))
 }
 
 // A running process launched before metadata-derived ctx-size was known (or
@@ -349,8 +358,37 @@ export class LlamaCppAdapter implements EngineAdapter {
       "--no-webui",
     ]
 
-    const ngl = model.quantization ? parseInt(model.quantization.replace(/[^0-9]/g, "")) || 99 : 99
+    const threads = opts?.threads ?? getPhysicalCpuCount()
+    argv.push("--threads", String(threads))
+
+    const ngl = opts?.gpuLayers !== undefined
+      ? opts.gpuLayers
+      : (model.quantization ? parseInt(model.quantization.replace(/[^0-9]/g, "")) || 99 : 99)
     argv.push("-ngl", String(ngl))
+
+    if (opts?.batchSize) {
+      argv.push("--batch-size", String(opts.batchSize))
+    }
+    if (opts?.ubatchSize) {
+      argv.push("--ubatch-size", String(opts.ubatchSize))
+    }
+    if (opts?.flashAttn !== undefined) {
+      argv.push("--flash-attn", opts.flashAttn ? "on" : "off")
+    } else if (platform() === "darwin") {
+      argv.push("--flash-attn", "on")
+    }
+    if (opts?.cacheTypeK) {
+      argv.push("--cache-type-k", opts.cacheTypeK)
+    }
+    if (opts?.cacheTypeV) {
+      argv.push("--cache-type-v", opts.cacheTypeV)
+    }
+    if (opts?.parallel) {
+      argv.push("--parallel", String(opts.parallel))
+    }
+    if (opts?.draftModel) {
+      argv.push("--model-draft", resolve(opts.draftModel))
+    }
 
     const proc = spawn(this.resolved.bin, argv, opts?.detach ? { stdio: "ignore", detached: true } : { stdio: "pipe" })
     if (opts?.detach) proc.unref()

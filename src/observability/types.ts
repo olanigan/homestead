@@ -52,6 +52,9 @@ export interface ResponsePayload {
   latency_ms: number
   status: number
   client?: string
+  prompt_tps?: number
+  completion_tps?: number
+  ttft_ms?: number
 }
 
 export interface ErrorPayload {
