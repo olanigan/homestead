@@ -1,0 +1,78 @@
+schema_version: "v1"
+name: "HomeCoder-Q4"
+version: "1.0.0"
+author: "Homestead Labs"
+description: "Homestead Sovereign AI Operator & RL-Trained Code Intelligence Fleet"
+
+base:
+  source: "hf-hub"
+  id: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
+  quantization: "Q4_K_M"
+  format: "gguf"
+
+adapters:
+  - name: "homecoder-grpo-reasoning"
+    source: "modal-volume"
+    path: "/models/homecoder-grpo-v1-lora"
+    merge_strategy: "lora"
+
+engine:
+  preferred: "llama.cpp"
+  hardware_matrix:
+    gpu_min_vram_gb: 8
+    cuda_compute_capability: "sm_70"
+    supported_accelerators:
+      - "metal"
+      - "cuda"
+      - "rocm"
+      - "cpu"
+    cpu_fallback: true
+
+fleet_arbitrage:
+  primary:
+    tier: "local-llama-cpp"
+    provider: "local"
+    accelerator: "metal-m-series"
+    max_cost_per_hour: 0.0
+  escalation:
+    tier: "modal-l4"
+    provider: "modal"
+    accelerator: "nvidia-l4"
+    max_cost_per_hour: 0.8
+    triggers:
+      timeout_seconds: 30
+      hardware_failure_count: 3
+      verifier_score_threshold: 0.85
+  fallback:
+    tier: "modal-a100"
+    provider: "modal"
+    accelerator: "nvidia-a100-40gb"
+    max_cost_per_hour: 2.1
+    triggers:
+      timeout_seconds: 60
+      hardware_failure_count: 5
+      verifier_score_threshold: 0.95
+
+system_contract:
+  template: "chatml"
+  reasoning:
+    open_tag: "<think>"
+    close_tag: "</think>"
+    max_thinking_tokens: 8192
+  tool_schema:
+    format: "pi-json"
+    allowed_tools:
+      - "read"
+      - "write"
+      - "edit"
+      - "bash"
+      - "grep_search"
+      - "find_by_name"
+
+observability:
+  log_sqlite: true
+  track_tokens_per_sec: true
+  composite_verifier:
+    enabled: true
+    rubric: "prime-intellect-verifiers-v1"
+    min_pass_rate: 0.95
