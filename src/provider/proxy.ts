@@ -154,21 +154,36 @@ export async function proxyToEngine(
       const reader = response.body!.getReader()
       const decoder = new TextDecoder()
       let tail = ""
+      let firstTokenTs: number | undefined
       const stream = new ReadableStream<Uint8Array>({
         async pull(controller) {
           const { done, value } = await reader.read()
           if (done) {
             controller.close()
+            const totalMs = Date.now() - startedAt
+            const ttftMs = firstTokenTs ? firstTokenTs - startedAt : undefined
+            const genMs = firstTokenTs ? Date.now() - firstTokenTs : totalMs
             const usage = extractStreamUsage(tail)
+            const inTokens = usage?.prompt_tokens ?? inputTokens
+            const outTokens = usage?.completion_tokens
+            const promptTps = inTokens && ttftMs && ttftMs > 0 ? Number(((inTokens / ttftMs) * 1000).toFixed(2)) : undefined
+            const completionTps = outTokens && genMs > 0 ? Number(((outTokens / genMs) * 1000).toFixed(2)) : undefined
+
             emitResponse({
               request_id: requestId,
-              latency_ms: Date.now() - startedAt,
+              latency_ms: totalMs,
               status: 200,
-              input_tokens: usage?.prompt_tokens ?? inputTokens,
-              output_tokens: usage?.completion_tokens,
+              input_tokens: inTokens,
+              output_tokens: outTokens,
               total_tokens: usage?.total_tokens,
+              ttft_ms: ttftMs,
+              prompt_tps: promptTps,
+              completion_tps: completionTps,
             })
             return
+          }
+          if (!firstTokenTs) {
+            firstTokenTs = Date.now()
           }
           tail += decoder.decode(value, { stream: true })
           if (tail.length > 16_384) tail = tail.slice(-16_384)
@@ -189,13 +204,19 @@ export async function proxyToEngine(
 
     const data = (await response.json()) as Record<string, unknown>
     const usage = extractUsage(data)
+    const totalMs = Date.now() - startedAt
+    const inTokens = usage?.prompt_tokens ?? inputTokens
+    const outTokens = usage?.completion_tokens
+    const completionTps = outTokens && totalMs > 0 ? Number(((outTokens / totalMs) * 1000).toFixed(2)) : undefined
+
     emitResponse({
       request_id: requestId,
-      latency_ms: Date.now() - startedAt,
+      latency_ms: totalMs,
       status: 200,
-      input_tokens: usage?.prompt_tokens ?? inputTokens,
-      output_tokens: usage?.completion_tokens,
+      input_tokens: inTokens,
+      output_tokens: outTokens,
       total_tokens: usage?.total_tokens,
+      completion_tps: completionTps,
     })
     return new Response(JSON.stringify(data), {
       headers: { "Content-Type": "application/json" },

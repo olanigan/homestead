@@ -26,6 +26,15 @@ export interface ModelRecord {
 
 export interface ServeOptions {
   detach?: boolean
+  threads?: number
+  gpuLayers?: number
+  batchSize?: number
+  ubatchSize?: number
+  flashAttn?: boolean
+  cacheTypeK?: string
+  cacheTypeV?: string
+  parallel?: number
+  draftModel?: string
 }
 
 export interface EngineAdapter {
