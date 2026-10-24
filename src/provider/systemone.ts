@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { Hono, type Context } from "hono"
 import type { Registry } from "../core/registry.js"
@@ -519,13 +519,9 @@ export async function executeSiliconSystemOne(
       if (entries.length > 26) {
         const stateLower = stateStr.toLowerCase()
         const sortedEntries = entries.sort((a, b) => {
-          const aMatch = stateLower.includes(a[0].toLowerCase().replace(/-/g, " ")) ? 1 : 0
-          const bMatch = stateLower.includes(b[0].toLowerCase().replace(/-/g, " ")) ? 1 : 0
-          if (aMatch !== bMatch) return bMatch - aMatch
-          // Drop granular shopping garment searches when prioritizing core service actions
-          const aGarment = /^(search-(boots|jacket|jeans|shirt))$/.test(a[0]) ? 1 : 0
-          const bGarment = /^(search-(boots|jacket|jeans|shirt))$/.test(b[0]) ? 1 : 0
-          return aGarment - bGarment
+          const aMatch = stateLower.includes(a[0].toLowerCase().replace(/[-_]/g, " ")) ? 1 : 0
+          const bMatch = stateLower.includes(b[0].toLowerCase().replace(/[-_]/g, " ")) ? 1 : 0
+          return bMatch - aMatch
         })
         criteria = Object.fromEntries(sortedEntries.slice(0, 26))
       } else if (entries.length < 2) {
@@ -771,6 +767,47 @@ export function createSystemOneRoutes(registry: Registry): Hono {
   // Support both /v1/systemone and /systemone at route root
   app.post("/v1/systemone", systemOneHandler)
   app.post("/systemone", systemOneHandler)
+
+  // Discrepancy telemetry logging endpoint
+  const discrepancyHandler = async (c: Context) => {
+    let payload: any
+    try {
+      payload = await c.req.json()
+    } catch {
+      return errorResponse(c, 400, "Invalid JSON in request body", "invalid_request_error", "invalid_json")
+    }
+
+    if (!payload || typeof payload !== "object") {
+      return errorResponse(c, 400, "Payload must be a JSON object", "invalid_request_error", "invalid_payload")
+    }
+
+    const event = {
+      timestamp: payload.timestamp || Date.now(),
+      isoTimestamp: payload.isoTimestamp || new Date().toISOString(),
+      prompt: payload.prompt || "",
+      options: payload.options || [],
+      modelA: payload.modelA || {},
+      modelB: payload.modelB || {},
+      useCase: payload.useCase || "tool_calling",
+      divergenceType: payload.divergenceType || "ARCHITECTURAL_MISMATCH",
+      metadata: payload.metadata || {},
+    }
+
+    try {
+      const dataDir = resolve(process.cwd(), "data/discrepancies")
+      mkdirSync(dataDir, { recursive: true })
+      const filePath = join(dataDir, "arena_divergences.jsonl")
+      appendFileSync(filePath, JSON.stringify(event) + "\n", "utf-8")
+    } catch (err) {
+      console.warn("[telemetry] Failed to append discrepancy event to disk:", err)
+    }
+
+    return c.json({ recorded: true, status: "ok" })
+  }
+
+  app.post("/v1/telemetry/discrepancies", discrepancyHandler)
+  app.post("/v1/discrepancies", discrepancyHandler)
+  app.post("/api/discrepancies", discrepancyHandler)
 
   // Informational GET endpoints for debugging
   app.get("/v1/systemone", (c) =>
