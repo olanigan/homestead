@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Registry } from "../src/core/registry.js"
 import { createProviderApp } from "../src/provider/homestead.js"
-import { resolveModelManifest, calculateEntropyConfidence, normalizeDistribution } from "../src/provider/systemone.js"
+import { resolveModelManifest, calculateEntropyConfidence, normalizeDistribution, normalizeSimplex } from "../src/provider/systemone.js"
 import { HomesteadProvider, choice, noul } from "../../../packages/s1sdk/src/index.js"
 import { serve, type Server } from "bun"
 
@@ -192,6 +192,33 @@ describe("System-1 Provider & /v1/systemone API", () => {
       const concentrated = { a: 0.97, b: 0.01, c: 0.01, d: 0.01 }
       const confConcentrated = calculateEntropyConfidence(concentrated)
       expect(confConcentrated).toBeGreaterThan(0.75)
+    })
+
+    it("normalizeSimplex linearly normalizes probabilities strictly summing to 1.0000 without double-softmax flattening", () => {
+      const alreadySoftmaxed = {
+        read: 0.0925,
+        bash: 0.0621,
+        grep_search: 0.1439,
+        edit_file: 0.0536,
+        write: 0.1182,
+        run_command: 0.0920,
+        view_file: 0.0698,
+        tier_cloud: 0.0930,
+        tier_frontier: 0.1710,
+        tier_local: 0.1038,
+      }
+      const simplexNorm = normalizeSimplex(alreadySoftmaxed)
+      const sum = Math.round(Object.values(simplexNorm.probabilities).reduce((a, b) => a + b, 0) * 10000) / 10000
+      expect(sum).toBe(1.0)
+      expect(simplexNorm.topChoice).toBe("tier_frontier")
+      // Without double-softmax, tier_frontier stays ~0.1710 rather than being squashed to 0.1074
+      expect(simplexNorm.probabilities["tier_frontier"]).toBeCloseTo(0.1710, 3)
+      expect(simplexNorm.probabilities["tier_frontier"]).toBeGreaterThan(0.16)
+
+      // Contrast with normalizeDistribution which does softmax (flattening towards uniform)
+      const doubleSoftmaxed = normalizeDistribution(alreadySoftmaxed, 1.0)
+      expect(doubleSoftmaxed.probabilities["tier_frontier"]).toBeLessThan(0.11)
+      expect(simplexNorm.probabilities["tier_frontier"]).toBeGreaterThan(doubleSoftmaxed.probabilities["tier_frontier"] * 1.5)
     })
   })
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { Hono, type Context } from "hono"
 import type { Registry } from "../core/registry.js"
@@ -193,19 +193,27 @@ export function resolveModelManifest(modelName: string, registry?: Registry): S1
 
   for (const dirName of candidateDirNames) {
     for (const root of searchRoots) {
-      const manifestPath = join(root, dirName.startsWith("models/") ? dirName : `models/${dirName}`, "model.sdm", "manifest.json")
-      if (existsSync(manifestPath)) {
-        try {
-          const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as S1ModelManifest
-          if (normalized.includes("agentic") || normalized.includes("coder") || normalized.includes("dev")) {
-            parsed.options = CANONICAL_AGENTIC_OPTIONS
-          } else if (normalized.includes("service") || normalized.includes("support")) {
-            parsed.options = CANONICAL_SERVICE_OPTIONS
+      const modelDir = join(root, dirName.startsWith("models/") ? dirName : `models/${dirName}`)
+      const manifestCandidates = [
+        join(modelDir, "manifest.json"),
+        join(modelDir, "model.sdm", "manifest.json"),
+      ]
+      for (const manifestPath of manifestCandidates) {
+        if (existsSync(manifestPath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(manifestPath, "utf-8")) as S1ModelManifest
+            if (!parsed.options || !Array.isArray(parsed.options) || parsed.options.length === 0) {
+              if (normalized.includes("agentic") || normalized.includes("coder") || normalized.includes("dev")) {
+                parsed.options = CANONICAL_AGENTIC_OPTIONS
+              } else if (normalized.includes("service") || normalized.includes("support")) {
+                parsed.options = CANONICAL_SERVICE_OPTIONS
+              }
+            }
+            manifestCache.set(normalized, parsed)
+            return parsed
+          } catch {
+            // ignore parse error, try next
           }
-          manifestCache.set(normalized, parsed)
-          return parsed
-        } catch {
-          // ignore parse error, try next
         }
       }
     }
@@ -291,6 +299,85 @@ export function normalizeDistribution<T extends string>(rawScores: Record<T, num
   for (let i = 1; i < rawProbs.length; i++) {
     const cur = rawProbs[i] ?? 0
     const best = rawProbs[maxIdx] ?? 0
+    if (cur > best) {
+      maxIdx = i
+    }
+  }
+
+  const bestKey = keys[maxIdx] ?? firstKey
+
+  // Adjust largest probability so sum is strictly 1.0000
+  const diff = Math.round((1.0 - sumRounded) * 10000) / 10000
+  roundedProbs[maxIdx] = Math.round(((roundedProbs[maxIdx] ?? 0) + diff) * 10000) / 10000
+
+  const probabilities = {} as Record<T, number>
+  keys.forEach((k, idx) => {
+    probabilities[k] = Math.max(0.0, roundedProbs[idx] ?? 0)
+  })
+
+  // Re-verify strict 1.0000 sum
+  sumRounded = Object.values(probabilities).reduce((acc: number, v) => acc + (v as number), 0)
+  if (Math.abs(sumRounded - 1.0) > 0.0001) {
+    const finalDiff = 1.0 - sumRounded
+    probabilities[bestKey] = Math.round(((probabilities[bestKey] ?? 0) + finalDiff) * 10000) / 10000
+  }
+
+  // Entropy calculation
+  const values = Object.values(probabilities).filter((p) => (p as number) > 0) as number[]
+  const n = keys.length
+  const h = values.length > 1 ? -values.reduce((sum, p) => sum + p * Math.log(p), 0) : 0
+  const entropy = Math.round(h * 10000) / 10000
+
+  let confidence: number
+  if (n <= 1) {
+    confidence = 1.0
+  } else {
+    const normH = h / Math.log(n)
+    const entConf = Math.max(0.0, Math.min(1.0, 1.0 - normH))
+    const peakProb = probabilities[bestKey] ?? 0
+    confidence = Math.round(Math.max(entConf, peakProb >= 0.90 ? peakProb : entConf) * 10000) / 10000
+  }
+
+  return {
+    probabilities,
+    topChoice: bestKey,
+    confidence,
+    entropy,
+  }
+}
+
+/**
+ * Linearly normalizes an already-softmaxed probability distribution to strictly sum to 1.0000
+ * without exponentiation, preserving model confidence and accurate Shannon entropy.
+ */
+export function normalizeSimplex<T extends string>(rawProbs: Record<T, number>): {
+  probabilities: Record<T, number>
+  topChoice: T
+  confidence: number
+  entropy: number
+} {
+  const keys = Object.keys(rawProbs) as T[]
+  const firstKey = keys[0]
+  if (!firstKey) {
+    throw new Error("Cannot normalize empty distribution")
+  }
+
+  // Linear scaling without exponentiation
+  const nonNegative = keys.map((k) => Math.max(0, rawProbs[k] ?? 0))
+  const sumValues = nonNegative.reduce((acc, val) => acc + val, 0)
+  const linearProbs = sumValues > 0
+    ? nonNegative.map((v) => v / sumValues)
+    : keys.map(() => 1.0 / keys.length)
+
+  // Round to 4 decimal places
+  const roundedProbs = linearProbs.map((p) => Math.round(p * 10000) / 10000)
+  let sumRounded = roundedProbs.reduce((acc, v) => acc + v, 0)
+
+  // Find argmax
+  let maxIdx = 0
+  for (let i = 1; i < linearProbs.length; i++) {
+    const cur = linearProbs[i] ?? 0
+    const best = linearProbs[maxIdx] ?? 0
     if (cur > best) {
       maxIdx = i
     }
@@ -432,13 +519,9 @@ export async function executeSiliconSystemOne(
       if (entries.length > 26) {
         const stateLower = stateStr.toLowerCase()
         const sortedEntries = entries.sort((a, b) => {
-          const aMatch = stateLower.includes(a[0].toLowerCase().replace(/-/g, " ")) ? 1 : 0
-          const bMatch = stateLower.includes(b[0].toLowerCase().replace(/-/g, " ")) ? 1 : 0
-          if (aMatch !== bMatch) return bMatch - aMatch
-          // Drop granular shopping garment searches when prioritizing core service actions
-          const aGarment = /^(search-(boots|jacket|jeans|shirt))$/.test(a[0]) ? 1 : 0
-          const bGarment = /^(search-(boots|jacket|jeans|shirt))$/.test(b[0]) ? 1 : 0
-          return aGarment - bGarment
+          const aMatch = stateLower.includes(a[0].toLowerCase().replace(/[-_]/g, " ")) ? 1 : 0
+          const bMatch = stateLower.includes(b[0].toLowerCase().replace(/[-_]/g, " ")) ? 1 : 0
+          return bMatch - aMatch
         })
         criteria = Object.fromEntries(sortedEntries.slice(0, 26))
       } else if (entries.length < 2) {
@@ -514,12 +597,19 @@ export async function executeSiliconSystemOne(
 
     if (qDef.type === "choice") {
       let probabilities = ans.probabilities || {}
+      let logits = ans.logits || ans.raw_scores
       let topChoice = ans.choice
       let confidence = ans.confidence ?? 0.0
       let entropy = ans.entropy
 
-      if (Object.keys(probabilities).length > 0) {
-        const norm = normalizeDistribution(probabilities, 1.0)
+      if (logits && typeof logits === "object" && Object.keys(logits).length > 0) {
+        const norm = normalizeDistribution(logits, manifest.calibration?.temperature ?? 1.0)
+        probabilities = norm.probabilities
+        topChoice = ans.choice || norm.topChoice
+        confidence = ans.confidence !== undefined ? ans.confidence : norm.confidence
+        entropy = norm.entropy
+      } else if (probabilities && typeof probabilities === "object" && Object.keys(probabilities).length > 0) {
+        const norm = normalizeSimplex(probabilities)
         probabilities = norm.probabilities
         topChoice = ans.choice || norm.topChoice
         confidence = ans.confidence !== undefined ? ans.confidence : norm.confidence
@@ -544,12 +634,18 @@ export async function executeSiliconSystemOne(
         confidence: Math.round(Math.abs(noulVal - 0.5) * 2 * 10000) / 10000,
       }
     } else if (qDef.type === "score") {
+      let scoreProbs = ans.probabilities
+      if (ans.logits && typeof ans.logits === "object" && Object.keys(ans.logits).length > 0) {
+        scoreProbs = normalizeDistribution(ans.logits, manifest.calibration?.temperature ?? 1.0).probabilities
+      } else if (scoreProbs && typeof scoreProbs === "object" && Object.keys(scoreProbs).length > 0) {
+        scoreProbs = normalizeSimplex(scoreProbs).probabilities
+      }
       answers[key] = {
         type: "score",
         score: typeof ans.score === "number" ? Math.round(ans.score * 10000) / 10000 : ans.score,
         expected_score: typeof ans.score === "number" ? Math.round(ans.score * 10000) / 10000 : ans.score,
         confidence: typeof ans.confidence === "number" ? Math.round(ans.confidence * 10000) / 10000 : 0.0,
-        probabilities: ans.probabilities,
+        probabilities: scoreProbs || ans.probabilities,
         legend: ans.legend,
         levels: qDef.levels || qDef.criteria || [1, 2, 3, 4, 5],
       }
@@ -671,6 +767,47 @@ export function createSystemOneRoutes(registry: Registry): Hono {
   // Support both /v1/systemone and /systemone at route root
   app.post("/v1/systemone", systemOneHandler)
   app.post("/systemone", systemOneHandler)
+
+  // Discrepancy telemetry logging endpoint
+  const discrepancyHandler = async (c: Context) => {
+    let payload: any
+    try {
+      payload = await c.req.json()
+    } catch {
+      return errorResponse(c, 400, "Invalid JSON in request body", "invalid_request_error", "invalid_json")
+    }
+
+    if (!payload || typeof payload !== "object") {
+      return errorResponse(c, 400, "Payload must be a JSON object", "invalid_request_error", "invalid_payload")
+    }
+
+    const event = {
+      timestamp: payload.timestamp || Date.now(),
+      isoTimestamp: payload.isoTimestamp || new Date().toISOString(),
+      prompt: payload.prompt || "",
+      options: payload.options || [],
+      modelA: payload.modelA || {},
+      modelB: payload.modelB || {},
+      useCase: payload.useCase || "tool_calling",
+      divergenceType: payload.divergenceType || "ARCHITECTURAL_MISMATCH",
+      metadata: payload.metadata || {},
+    }
+
+    try {
+      const dataDir = resolve(process.cwd(), "data/discrepancies")
+      mkdirSync(dataDir, { recursive: true })
+      const filePath = join(dataDir, "arena_divergences.jsonl")
+      appendFileSync(filePath, JSON.stringify(event) + "\n", "utf-8")
+    } catch (err) {
+      console.warn("[telemetry] Failed to append discrepancy event to disk:", err)
+    }
+
+    return c.json({ recorded: true, status: "ok" })
+  }
+
+  app.post("/v1/telemetry/discrepancies", discrepancyHandler)
+  app.post("/v1/discrepancies", discrepancyHandler)
+  app.post("/api/discrepancies", discrepancyHandler)
 
   // Informational GET endpoints for debugging
   app.get("/v1/systemone", (c) =>
