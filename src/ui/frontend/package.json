@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "s1sdk": "github:olanigan/s1sdk"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

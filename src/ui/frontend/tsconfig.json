@@ -10,12 +10,12 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "s1sdk": ["../../../../../packages/s1sdk/src/index.ts"],
-      "s1sdk/*": ["../../../../../packages/s1sdk/src/*"]
-    }
+      "s1sdk": ["node_modules/s1sdk/src/index.ts"],
+      "s1sdk/*": ["node_modules/s1sdk/src/*"]
+    },
+    "noEmit": true
   },
   "include": ["src"]
 }
