@@ -597,7 +597,7 @@ export async function executeSiliconSystemOne(
 
     if (qDef.type === "choice") {
       let probabilities = ans.probabilities || {}
-      let logits = ans.logits || ans.raw_scores
+      const logits = ans.logits || ans.raw_scores
       let topChoice = ans.choice
       let confidence = ans.confidence ?? 0.0
       let entropy = ans.entropy
