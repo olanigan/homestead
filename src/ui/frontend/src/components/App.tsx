@@ -4,6 +4,30 @@ import type { ModelRecord } from "../types"
 import ObservabilityPanel from "./ObservabilityPanel.js"
 import SideBySideArena from "./SideBySideArena.js"
 
+function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light")
+  )
+  const toggle = () => {
+    const next = theme === "dark" ? "light" : "dark"
+    document.documentElement.dataset.theme = next
+    localStorage.setItem("homestead-theme", next)
+    setTheme(next)
+  }
+  return (
+    <button
+      onClick={toggle}
+      title="Toggle light/dark theme"
+      style={{
+        padding: "8px 12px", fontSize: 13, borderRadius: 6, cursor: "pointer",
+        border: "1px solid #d0d7de", backgroundColor: "#fff", color: "#374151",
+      }}
+    >
+      {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+    </button>
+  )
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B"
   const units = ["B", "KB", "MB", "GB", "TB"]
@@ -218,6 +242,7 @@ export default function App() {
           <span style={{ color: "#4f46e5" }}>homestead</span> — Local AI Harness
         </h1>
         <div style={{ display: "flex", gap: 8 }}>
+          <ThemeToggle />
           <button onClick={async () => { await discover(); refetch() }} disabled={scanning} style={{
             padding: "8px 16px", fontSize: 13, borderRadius: 6, border: "none",
             backgroundColor: scanning ? "#9ca3af" : "#4f46e5", color: "#fff", cursor: scanning ? "not-allowed" : "pointer",
