@@ -76,8 +76,13 @@ function EventRow({ event }: { event: ServingEvent }) {
   let detail = ""
   if (event.type === "model_loaded") detail = `:${(payload as any).port} · pid ${(payload as any).pid}`
   else if (event.type === "request") detail = `${(payload as any).model || ""} · ${(payload as any).input_tokens || "?"}t in`
-  else if (event.type === "response") detail = `${(payload as any).output_tokens || 0}t out · ${(payload as any).latency_ms || 0}ms`
-  else if (event.type === "error") detail = (payload as any).message || ""
+  else if (event.type === "response") {
+    const p = payload as any
+    const parts = [`${p.output_tokens || 0}t out`, `${p.latency_ms || 0}ms`]
+    if (p.ttft_ms !== undefined && p.ttft_ms !== null) parts.push(`TTFT: ${p.ttft_ms.toFixed(1)}ms`)
+    if (p.completion_tps !== undefined && p.completion_tps !== null) parts.push(`⚡ ${p.completion_tps.toFixed(1)} tok/s`)
+    detail = parts.join(" · ")
+  } else if (event.type === "error") detail = (payload as any).message || ""
 
   return (
     <div style={{

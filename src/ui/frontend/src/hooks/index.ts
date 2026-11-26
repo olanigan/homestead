@@ -122,3 +122,25 @@ export function useDiscover() {
 
   return { discover, scanning }
 }
+
+export function useBenchmarks(suite?: string) {
+  const [benchmarks, setBenchmarks] = useState<import("../types").BenchmarkRecord[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const fetchBenchmarks = useCallback(async () => {
+    try {
+      const url = suite ? `${API}/api/benchmarks?suite=${encodeURIComponent(suite)}` : `${API}/api/benchmarks`
+      const res = await fetch(url)
+      if (res.ok) setBenchmarks(await res.json())
+    } catch { /* ignore */ }
+    setLoading(false)
+  }, [suite])
+
+  useEffect(() => {
+    fetchBenchmarks()
+    const interval = setInterval(fetchBenchmarks, 5000)
+    return () => clearInterval(interval)
+  }, [fetchBenchmarks])
+
+  return { benchmarks, loading, refetch: fetchBenchmarks }
+}

@@ -250,4 +250,39 @@ describe("TPS Tuning & Benchmarking", () => {
       spy.mockRestore()
     })
   })
+
+  describe("ObsDb Benchmark Storage", () => {
+    it("stores, queries, and filters benchmark records", () => {
+      const db = globalEmitter.getDb()
+      const record: BenchmarkRecord = {
+        id: "bench-test-1",
+        suite: "UI Studio Sweeps",
+        model_id: "test-model-1",
+        model_name: "SmolLM2-135M",
+        label: "4 Threads, Batch 512",
+        config: { threads: 4, batchSize: 512, flashAttn: true },
+        workload: { promptLength: 100, maxTokens: 64, runs: 2 },
+        prompt_tokens: 39,
+        output_tokens: 32,
+        total_tokens: 71,
+        ttft_ms: 18.5,
+        prompt_tps: 3109.9,
+        completion_tps: 223.1,
+        total_ms: 160,
+        status: "completed",
+        created_at: new Date().toISOString(),
+      }
+
+      const ok = db.insertBenchmark(record)
+      expect(ok).toBe(true)
+
+      const fetched = db.getBenchmarks({ suite: "UI Studio Sweeps" })
+      expect(fetched.length).toBeGreaterThan(0)
+      const found = fetched.find((b) => b.id === "bench-test-1")
+      expect(found).toBeDefined()
+      expect(found?.completion_tps).toBe(223.1)
+      expect(found?.ttft_ms).toBe(18.5)
+      expect(found?.config.threads).toBe(4)
+    })
+  })
 })

@@ -7,6 +7,9 @@ import { discoverAll } from "../core/scanner.js"
 import { engineManager } from "../engines/index.js"
 import { globalEmitter } from "../observability/emitter.js"
 import { createProviderApp } from "../provider/homestead.js"
+import { resolveProxyUrl } from "../provider/proxy.js"
+import type { ServeOptions } from "../types.js"
+import type { BenchmarkRecord } from "../observability/types.js"
 
 export async function serveUi(
   port: number,
@@ -39,9 +42,169 @@ export async function serveUi(
     const engine = engineManager.selectEngine(model)
     if (!engine) return c.json({ error: `no engine for format ${model.format}` }, 400)
     try {
-      const proc = await engine.serve(model, 8080)
+      let serveOpts: ServeOptions | undefined
+      let port = 8080
+      try {
+        const body = (await c.req.json()) as Record<string, unknown>
+        if (body && typeof body === "object") {
+          if (typeof body.port === "number") port = body.port
+          serveOpts = {
+            threads: typeof body.threads === "number" ? body.threads : undefined,
+            gpuLayers: typeof body.gpuLayers === "number" ? body.gpuLayers : undefined,
+            batchSize: typeof body.batchSize === "number" ? body.batchSize : undefined,
+            ubatchSize: typeof body.ubatchSize === "number" ? body.ubatchSize : undefined,
+            flashAttn: typeof body.flashAttn === "boolean" ? body.flashAttn : undefined,
+            cacheTypeK: typeof body.cacheTypeK === "string" ? body.cacheTypeK : undefined,
+            cacheTypeV: typeof body.cacheTypeV === "string" ? body.cacheTypeV : undefined,
+            parallel: typeof body.parallel === "number" ? body.parallel : undefined,
+            draftModel: typeof body.draftModel === "string" ? body.draftModel : undefined,
+          }
+        }
+      } catch {}
+      const proc = await engine.serve(model, port, serveOpts)
       registry.updateStatus(model.id, "serving")
       return c.json(proc)
+    } catch (err) {
+      return c.json({ error: String(err) }, 500)
+    }
+  })
+
+  app.post("/api/models/:id/bench", async (c) => {
+    const model = registry.get(c.req.param("id"))
+    if (!model) return c.json({ error: "not found" }, 404)
+    const tags = (model.metadata?.tags as string[]) || []
+    if (tags.includes("vocab")) return c.json({ error: "vocabulary-only file, not a model with weights" }, 400)
+    if (tags.includes("cloud")) return c.json({ error: "cloud-only model, not available locally" }, 400)
+    if (tags.includes("incomplete")) return c.json({ error: "download is incomplete, missing files" }, 400)
+    const engine = engineManager.selectEngine(model)
+    if (!engine) return c.json({ error: `no engine for format ${model.format}` }, 400)
+
+    try {
+      let body: any = {}
+      try {
+        body = (await c.req.json()) || {}
+      } catch {}
+
+      const prompt = body.prompt || "Explain quantum computing in 3 simple paragraphs."
+      const maxTokens = body.maxTokens || 64
+      const runs = Math.max(1, body.runs || 2)
+      const serveOpts: ServeOptions = {
+        threads: body.threads !== undefined ? Number(body.threads) : undefined,
+        gpuLayers: body.gpuLayers !== undefined ? Number(body.gpuLayers) : undefined,
+        batchSize: body.batchSize !== undefined ? Number(body.batchSize) : undefined,
+        ubatchSize: body.ubatchSize !== undefined ? Number(body.ubatchSize) : undefined,
+        flashAttn: body.flashAttn !== undefined ? Boolean(body.flashAttn) : undefined,
+      }
+
+      const benchPort = 18800 + Math.floor(Math.random() * 80)
+      const proc = await engine.serve(model, benchPort, serveOpts)
+      const targetUrl = resolveProxyUrl(proc.endpoint, "/v1/chat/completions")
+
+      const runResults: Array<{
+        ttftMs: number
+        promptTps: number
+        completionTps: number
+        promptTokens: number
+        completionTokens: number
+        totalMs: number
+      }> = []
+
+      try {
+        for (let i = 0; i < runs; i++) {
+          const startedAt = Date.now()
+          const res = await fetch(targetUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: model.name,
+              messages: [{ role: "user", content: prompt }],
+              max_tokens: maxTokens,
+              temperature: 0,
+              stream: true,
+              stream_options: { include_usage: true },
+            }),
+          })
+
+          if (!res.ok || !res.body) {
+            throw new Error(`Inference request failed with HTTP ${res.status}: ${await res.text()}`)
+          }
+
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let firstTokenTs = 0
+          let completionTokens = 0
+          let promptTokens = Math.max(1, Math.round(prompt.length / 4))
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            const chunk = decoder.decode(value, { stream: true })
+            const lines = chunk.split("\n")
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue
+              const dataStr = line.slice(6).trim()
+              if (dataStr === "[DONE]") continue
+              try {
+                const parsed = JSON.parse(dataStr)
+                if (parsed.choices?.[0]?.delta?.content) {
+                  if (!firstTokenTs) firstTokenTs = Date.now()
+                  completionTokens++
+                }
+                if (parsed.usage) {
+                  if (parsed.usage.prompt_tokens) promptTokens = parsed.usage.prompt_tokens
+                  if (parsed.usage.completion_tokens) completionTokens = parsed.usage.completion_tokens
+                }
+              } catch {}
+            }
+          }
+
+          const totalMs = Date.now() - startedAt
+          const ttftMs = firstTokenTs ? firstTokenTs - startedAt : totalMs
+          const genMs = Math.max(1, totalMs - ttftMs)
+          const promptTps = ttftMs > 0 ? Number(((promptTokens / (ttftMs / 1000))).toFixed(2)) : 0
+          const completionTps = genMs > 0 ? Number(((completionTokens / (genMs / 1000))).toFixed(2)) : 0
+
+          runResults.push({ ttftMs, promptTps, completionTps, promptTokens, completionTokens, totalMs })
+        }
+      } finally {
+        await engine.stop(proc)
+      }
+
+      const avgTtft = runResults.reduce((acc, r) => acc + r.ttftMs, 0) / runResults.length
+      const avgPromptTps = runResults.reduce((acc, r) => acc + r.promptTps, 0) / runResults.length
+      const avgCompletionTps = runResults.reduce((acc, r) => acc + r.completionTps, 0) / runResults.length
+      const avgTotalMs = runResults.reduce((acc, r) => acc + r.totalMs, 0) / runResults.length
+      const lastRun = runResults[runResults.length - 1]
+
+      const record: BenchmarkRecord = {
+        id: `bench-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        suite: body.suite || "UI Studio",
+        model_id: model.id,
+        model_name: model.name,
+        label: body.label || (runs === 1 ? `Single Run (${maxTokens} tokens)` : `${runs} Runs Avg (-t ${serveOpts.threads ?? "auto"})`),
+        config: { ...serveOpts },
+        workload: { promptLength: prompt.length, maxTokens, runs },
+        prompt_tokens: lastRun?.promptTokens,
+        output_tokens: lastRun?.completionTokens,
+        total_tokens: (lastRun?.promptTokens ?? 0) + (lastRun?.completionTokens ?? 0),
+        ttft_ms: avgTtft,
+        prompt_tps: avgPromptTps,
+        completion_tps: avgCompletionTps,
+        total_ms: avgTotalMs,
+        status: "completed",
+        created_at: new Date().toISOString(),
+      }
+
+      globalEmitter.getDb().insertBenchmark(record)
+
+      return c.json({
+        record,
+        runs: runResults,
+        avgTtft,
+        avgPromptTps,
+        avgCompletionTps,
+        avgTotalMs,
+      })
     } catch (err) {
       return c.json({ error: String(err) }, 500)
     }
@@ -90,6 +253,29 @@ export async function serveUi(
       return c.json(globalEmitter.getDb().getSessionEvents(sessionId, since))
     }
     return c.json(globalEmitter.getDb().getRecentEvents(100))
+  })
+
+  app.get("/api/benchmarks", (c) => {
+    const suite = c.req.query("suite")
+    const modelId = c.req.query("model_id")
+    const limit = parseInt(c.req.query("limit") || "100", 10)
+    return c.json(globalEmitter.getDb().getBenchmarks({ suite, model_id: modelId, limit }))
+  })
+
+  app.post("/api/benchmarks", async (c) => {
+    try {
+      const record = await c.req.json()
+      const ok = globalEmitter.getDb().insertBenchmark(record)
+      return c.json({ success: ok }, ok ? 201 : 400)
+    } catch (err) {
+      return c.json({ error: String(err) }, 400)
+    }
+  })
+
+  app.delete("/api/benchmarks", (c) => {
+    const suite = c.req.query("suite")
+    globalEmitter.getDb().deleteBenchmarks(suite)
+    return c.json({ deleted: true })
   })
 
   app.get("/api/obs/stream", (c) => {
