@@ -1,10 +1,11 @@
 import { existsSync, statSync } from "node:fs"
 import { resolve } from "node:path"
 import { Command } from "commander"
-import type { ModelSource, ModelRecord, ServingProcess } from "../types.js"
+import type { ModelSource, ModelRecord, ServingProcess, ServeOptions } from "../types.js"
 import { Registry } from "../core/registry.js"
 import { discoverAll } from "../core/scanner.js"
 import { engineManager } from "../engines/index.js"
+import { resolveProxyUrl } from "../provider/proxy.js"
 interface ListOptions {
   source?: ModelSource
   format?: string
@@ -125,72 +126,120 @@ export function registerCli(program: Command): void {
       logger.log(`  Found:    ${model.discoveredAt}`)
     })
 
+  async function resolveServableModel(name: string): Promise<{ model: ModelRecord; engine: NonNullable<ReturnType<typeof engineManager.selectEngine>> }> {
+    let model = registry.get(name)
+    if (!model) {
+      if (existsSync(name)) {
+        const stat = statSync(name)
+        const fileName = name.split("/").pop()?.replace(/\.\w+$/, "") || "model"
+        const isGguf = name.endsWith(".gguf")
+        model = {
+          id: `inline-${fileName.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+          name: fileName,
+          source: "imported",
+          sourceId: resolve(name),
+          path: resolve(name),
+          sizeBytes: stat.size,
+          format: isGguf ? "gguf" : "unknown",
+          quantization: null,
+          engine: isGguf ? "llama.cpp" : null,
+          status: "discovered",
+          metadata: { tags: isGguf ? ["weights"] : ["unknown"] },
+          discoveredAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+      } else {
+        logger.error(`Model not found: ${name}. Provide a valid model name or file path.`)
+        process.exit(1)
+      }
+    }
+    if (model.source === "hf-hub" && model.format === "gguf" && !/\.gguf$/i.test(model.path)) {
+      const { resolveHfGgufPath } = await import("../scanners/hf-hub.js")
+      const resolved = resolveHfGgufPath(model.path)
+      if (resolved && resolved !== model.path) {
+        model.path = resolved
+        model.updatedAt = new Date().toISOString()
+        registry.upsert(model)
+        logger.log(`Resolved HF cache path to snapshot .gguf`)
+      }
+    }
+
+    const tags = (model.metadata?.tags as string[]) || []
+    if (tags.includes("vocab")) {
+      logger.error(`Cannot serve model "${name}": this is a vocabulary-only file, not a model with weights`)
+      process.exit(1)
+    }
+    if (tags.includes("cloud")) {
+      logger.error(`Cannot serve model "${name}": this is a cloud-only model, not available locally`)
+      process.exit(1)
+    }
+    if (tags.includes("incomplete")) {
+      logger.error(`Cannot serve model "${name}": download is incomplete (missing files)`)
+      process.exit(1)
+    }
+
+    const engine = engineManager.selectEngine(model)
+    if (!engine) {
+      logger.error(`No engine available for model ${name} (format: ${model.format})`)
+      process.exit(1)
+    }
+
+    return { model, engine }
+  }
+
   program
     .command("serve")
     .description("Start serving a model")
     .argument("<name>", "Model name or ID")
     .option("-p, --port <port>", "Port to serve on", "8080")
     .option("-d, --detach", "Detach after the server is healthy and exit the CLI")
-    .action(async (name: string, opts: { port: string; detach?: boolean }) => {
-      let model = registry.get(name)
-      if (!model) {
-        if (existsSync(name)) {
-          const stat = statSync(name)
-          const fileName = name.split("/").pop()?.replace(/\.\w+$/, "") || "model"
-          const isGguf = name.endsWith(".gguf")
-          model = {
-            id: `inline-${fileName.toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "-")}`,
-            name: fileName,
-            source: "imported",
-            sourceId: resolve(name),
-            path: resolve(name),
-            sizeBytes: stat.size,
-            format: isGguf ? "gguf" : "unknown",
-            quantization: null,
-            engine: isGguf ? "llama.cpp" : null,
-            status: "discovered",
-            metadata: { tags: isGguf ? ["weights"] : ["unknown"] },
-            discoveredAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }
-        } else {
-          logger.error(`Model not found: ${name}. Provide a valid model name or file path.`)
-          process.exit(1)
-        }
+    .option("-t, --threads <threads>", "Number of CPU threads for inference")
+    .option("--ngl, --gpu-layers <layers>", "Number of layers to offload to GPU/Metal")
+    .option("-b, --batch-size <size>", "Prompt batch size")
+    .option("--ub, --ubatch-size <size>", "Physical micro-batch size")
+    .option("--fa, --flash-attn", "Enable Flash Attention")
+    .option("--cache-type-k <type>", "KV cache quantization type for K (f16, q8_0, q4_0, etc.)")
+    .option("--cache-type-v <type>", "KV cache quantization type for V (f16, q8_0, q4_0, etc.)")
+    .option("--np, --parallel <parallel>", "Number of parallel request slots")
+    .option("--draft-model <path>", "Path to draft model for speculative decoding")
+    .action(async (name: string, opts: {
+      port: string
+      detach?: boolean
+      threads?: string
+      gpuLayers?: string
+      ngl?: string
+      batchSize?: string
+      ubatchSize?: string
+      ub?: string
+      flashAttn?: boolean
+      fa?: boolean
+      cacheTypeK?: string
+      cacheTypeV?: string
+      parallel?: string
+      np?: string
+      draftModel?: string
+    }) => {
+      const { model, engine } = await resolveServableModel(name)
+      const serveOpts: ServeOptions = {
+        detach: opts.detach,
       }
-      if (model.source === "hf-hub" && model.format === "gguf" && !/\.gguf$/i.test(model.path)) {
-        const { resolveHfGgufPath } = await import("../scanners/hf-hub.js")
-        const resolved = resolveHfGgufPath(model.path)
-        if (resolved && resolved !== model.path) {
-          model.path = resolved
-          model.updatedAt = new Date().toISOString()
-          registry.upsert(model)
-          logger.log(`Resolved HF cache path to snapshot .gguf`)
-        }
-      }
+      if (opts.threads !== undefined) serveOpts.threads = parseInt(opts.threads, 10)
+      const gpuLayersVal = opts.gpuLayers ?? opts.ngl
+      if (gpuLayersVal !== undefined) serveOpts.gpuLayers = parseInt(gpuLayersVal, 10)
+      if (opts.batchSize !== undefined) serveOpts.batchSize = parseInt(opts.batchSize, 10)
+      const ubatchVal = opts.ubatchSize ?? opts.ub
+      if (ubatchVal !== undefined) serveOpts.ubatchSize = parseInt(ubatchVal, 10)
+      const faVal = opts.flashAttn ?? opts.fa
+      if (faVal !== undefined) serveOpts.flashAttn = faVal
+      if (opts.cacheTypeK !== undefined) serveOpts.cacheTypeK = opts.cacheTypeK
+      if (opts.cacheTypeV !== undefined) serveOpts.cacheTypeV = opts.cacheTypeV
+      const npVal = opts.parallel ?? opts.np
+      if (npVal !== undefined) serveOpts.parallel = parseInt(npVal, 10)
+      if (opts.draftModel !== undefined) serveOpts.draftModel = opts.draftModel
 
-      const tags = (model.metadata?.tags as string[]) || []
-      if (tags.includes("vocab")) {
-        logger.error(`Cannot serve model "${name}": this is a vocabulary-only file, not a model with weights`)
-        process.exit(1)
-      }
-      if (tags.includes("cloud")) {
-        logger.error(`Cannot serve model "${name}": this is a cloud-only model, not available locally`)
-        process.exit(1)
-      }
-      if (tags.includes("incomplete")) {
-        logger.error(`Cannot serve model "${name}": download is incomplete (missing files)`)
-        process.exit(1)
-      }
-
-      const engine = engineManager.selectEngine(model)
-      if (!engine) {
-        logger.error(`No engine available for model ${name} (format: ${model.format})`)
-        process.exit(1)
-      }
       logger.log(`Starting ${model.name} via ${engine.name} on port ${opts.port}...`)
       try {
-        const proc = await engine.serve(model, parseInt(opts.port), { detach: opts.detach })
+        const proc = await engine.serve(model, parseInt(opts.port, 10), serveOpts)
         registry.updateStatus(model.id, "serving")
         logger.log(`  Serving at ${proc.endpoint}`)
         logger.log(`  PID: ${proc.pid}`)
@@ -201,6 +250,137 @@ export function registerCli(program: Command): void {
       } catch (err) {
         logger.error(`Failed to serve model: ${err}`)
         process.exit(1)
+      }
+    })
+
+  program
+    .command("bench")
+    .description("Benchmark model inference performance (TTFT, Prompt TPS, Completion TPS)")
+    .argument("<name>", "Model name or GGUF file path")
+    .option("-p, --port <port>", "Port to serve benchmark on", "18799")
+    .option("--prompt <prompt>", "Prompt for benchmarking", "Explain quantum computing in 3 simple paragraphs.")
+    .option("--max-tokens <tokens>", "Maximum tokens to generate", "128")
+    .option("--runs <runs>", "Number of benchmark iterations", "3")
+    .option("-t, --threads <threads>", "Number of CPU threads for inference")
+    .option("-b, --batch-size <size>", "Prompt batch size")
+    .option("--ub, --ubatch-size <size>", "Physical micro-batch size")
+    .option("--fa, --flash-attn", "Enable Flash Attention")
+    .action(async (name: string, opts: {
+      port: string
+      prompt: string
+      maxTokens: string
+      runs: string
+      threads?: string
+      batchSize?: string
+      ubatchSize?: string
+      ub?: string
+      flashAttn?: boolean
+      fa?: boolean
+    }) => {
+      const { model, engine } = await resolveServableModel(name)
+      const port = parseInt(opts.port, 10)
+      const maxTokens = parseInt(opts.maxTokens, 10)
+      const runsCount = Math.max(1, parseInt(opts.runs, 10) || 3)
+
+      const serveOpts: ServeOptions = {}
+      if (opts.threads !== undefined) serveOpts.threads = parseInt(opts.threads, 10)
+      if (opts.batchSize !== undefined) serveOpts.batchSize = parseInt(opts.batchSize, 10)
+      const ubatchVal = opts.ubatchSize ?? opts.ub
+      if (ubatchVal !== undefined) serveOpts.ubatchSize = parseInt(ubatchVal, 10)
+      const faVal = opts.flashAttn ?? opts.fa
+      if (faVal !== undefined) serveOpts.flashAttn = faVal
+
+      logger.log(`\nBenchmarking ${model.name} (${runsCount} runs, max_tokens: ${maxTokens})...`)
+      let proc: ServingProcess | null = null
+      try {
+        proc = await engine.serve(model, port, serveOpts)
+        const targetUrl = resolveProxyUrl(proc.endpoint, "/v1/chat/completions")
+
+        const runResults: Array<{
+          ttftMs: number
+          promptTps: number
+          completionTps: number
+          promptTokens: number
+          completionTokens: number
+          totalMs: number
+        }> = []
+
+        for (let i = 1; i <= runsCount; i++) {
+          const startedAt = Date.now()
+          const res = await fetch(targetUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: model.name,
+              messages: [{ role: "user", content: opts.prompt }],
+              max_tokens: maxTokens,
+              temperature: 0,
+              stream: true,
+              stream_options: { include_usage: true },
+            }),
+          })
+
+          if (!res.ok || !res.body) {
+            throw new Error(`Inference request failed with HTTP ${res.status}: ${await res.text()}`)
+          }
+
+          const reader = res.body.getReader()
+          const decoder = new TextDecoder()
+          let firstTokenTs = 0
+          let completionTokens = 0
+          let promptTokens = Math.max(1, Math.round(opts.prompt.length / 4))
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            const chunk = decoder.decode(value, { stream: true })
+            const lines = chunk.split("\n")
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue
+              const dataStr = line.slice(6).trim()
+              if (dataStr === "[DONE]") continue
+              try {
+                const parsed = JSON.parse(dataStr)
+                if (parsed.choices?.[0]?.delta?.content) {
+                  if (!firstTokenTs) {
+                    firstTokenTs = Date.now()
+                  }
+                  completionTokens++
+                }
+                if (parsed.usage) {
+                  if (parsed.usage.prompt_tokens) promptTokens = parsed.usage.prompt_tokens
+                  if (parsed.usage.completion_tokens) completionTokens = parsed.usage.completion_tokens
+                }
+              } catch {}
+            }
+          }
+
+          const totalMs = Date.now() - startedAt
+          const ttftMs = firstTokenTs ? firstTokenTs - startedAt : totalMs
+          const genMs = Math.max(1, totalMs - ttftMs)
+          const promptTps = ttftMs > 0 ? Number(((promptTokens / (ttftMs / 1000))).toFixed(2)) : 0
+          const completionTps = genMs > 0 ? Number(((completionTokens / (genMs / 1000))).toFixed(2)) : 0
+
+          runResults.push({ ttftMs, promptTps, completionTps, promptTokens, completionTokens, totalMs })
+          logger.log(`  Run ${i}/${runsCount}: TTFT: ${ttftMs.toFixed(1)}ms | Prompt TPS: ${promptTps.toFixed(2)} | Completion TPS: ${completionTps.toFixed(2)} | Total: ${totalMs}ms (prompt: ${promptTokens} tok, completion: ${completionTokens} tok)`)
+        }
+
+        const avgTtft = runResults.reduce((acc, r) => acc + r.ttftMs, 0) / runResults.length
+        const avgPromptTps = runResults.reduce((acc, r) => acc + r.promptTps, 0) / runResults.length
+        const avgCompletionTps = runResults.reduce((acc, r) => acc + r.completionTps, 0) / runResults.length
+
+        logger.log(`\nBenchmark Summary for ${model.name}:`)
+        logger.log(`  Runs:           ${runResults.length}`)
+        logger.log(`  Avg TTFT:       ${avgTtft.toFixed(1)} ms`)
+        logger.log(`  Avg Prompt TPS: ${avgPromptTps.toFixed(2)} tok/s`)
+        logger.log(`  Avg Output TPS: ${avgCompletionTps.toFixed(2)} tok/s\n`)
+      } catch (err) {
+        logger.error(`Benchmark failed: ${err instanceof Error ? err.message : String(err)}`)
+        process.exit(1)
+      } finally {
+        if (proc) {
+          await engine.stop(proc)
+        }
       }
     })
 

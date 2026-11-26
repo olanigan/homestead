@@ -310,6 +310,56 @@ export class LlamaCppAdapter implements EngineAdapter {
     return model.format === "gguf" && model.source !== "ollama"
   }
 
+  buildArgv(model: ModelRecord, port: number, opts?: ServeOptions, modelPathOverride?: string): string[] {
+    const resolvedArgs = this.resolved?.args ?? []
+    const host = "127.0.0.1"
+    const modelPath = modelPathOverride ?? resolve(model.path)
+    const ctxSize = resolveCtxSize(model)
+    const argv: string[] = [
+      ...resolvedArgs,
+      "--model", modelPath,
+      "--host", host,
+      "--port", String(port),
+      "--ctx-size", String(ctxSize),
+      "--jinja",
+      "--no-webui",
+    ]
+
+    const threads = opts?.threads ?? getPhysicalCpuCount()
+    argv.push("--threads", String(threads))
+
+    const ngl = opts?.gpuLayers !== undefined
+      ? opts.gpuLayers
+      : (model.quantization ? parseInt(model.quantization.replace(/[^0-9]/g, "")) || 99 : 99)
+    argv.push("-ngl", String(ngl))
+
+    if (opts?.batchSize) {
+      argv.push("--batch-size", String(opts.batchSize))
+    }
+    if (opts?.ubatchSize) {
+      argv.push("--ubatch-size", String(opts.ubatchSize))
+    }
+    if (opts?.flashAttn !== undefined) {
+      argv.push("--flash-attn", opts.flashAttn ? "on" : "off")
+    } else if (platform() === "darwin") {
+      argv.push("--flash-attn", "on")
+    }
+    if (opts?.cacheTypeK) {
+      argv.push("--cache-type-k", opts.cacheTypeK)
+    }
+    if (opts?.cacheTypeV) {
+      argv.push("--cache-type-v", opts.cacheTypeV)
+    }
+    if (opts?.parallel) {
+      argv.push("--parallel", String(opts.parallel))
+    }
+    if (opts?.draftModel) {
+      argv.push("--model-draft", resolve(opts.draftModel))
+    }
+
+    return argv
+  }
+
   async serve(model: ModelRecord, port: number, opts?: ServeOptions): Promise<ServingProcess> {
     const existing = runningProcesses.get(model.id)
     if (existing) {
@@ -348,47 +398,7 @@ export class LlamaCppAdapter implements EngineAdapter {
     this.resolved = resolved ?? this.resolved
 
     const ctxSize = resolveCtxSize(model)
-    const argv: string[] = [
-      ...this.resolved.args,
-      "--model", modelPath,
-      "--host", host,
-      "--port", String(resolvedPort),
-      "--ctx-size", String(ctxSize),
-      "--jinja",
-      "--no-webui",
-    ]
-
-    const threads = opts?.threads ?? getPhysicalCpuCount()
-    argv.push("--threads", String(threads))
-
-    const ngl = opts?.gpuLayers !== undefined
-      ? opts.gpuLayers
-      : (model.quantization ? parseInt(model.quantization.replace(/[^0-9]/g, "")) || 99 : 99)
-    argv.push("-ngl", String(ngl))
-
-    if (opts?.batchSize) {
-      argv.push("--batch-size", String(opts.batchSize))
-    }
-    if (opts?.ubatchSize) {
-      argv.push("--ubatch-size", String(opts.ubatchSize))
-    }
-    if (opts?.flashAttn !== undefined) {
-      argv.push("--flash-attn", opts.flashAttn ? "on" : "off")
-    } else if (platform() === "darwin") {
-      argv.push("--flash-attn", "on")
-    }
-    if (opts?.cacheTypeK) {
-      argv.push("--cache-type-k", opts.cacheTypeK)
-    }
-    if (opts?.cacheTypeV) {
-      argv.push("--cache-type-v", opts.cacheTypeV)
-    }
-    if (opts?.parallel) {
-      argv.push("--parallel", String(opts.parallel))
-    }
-    if (opts?.draftModel) {
-      argv.push("--model-draft", resolve(opts.draftModel))
-    }
+    const argv = this.buildArgv(model, resolvedPort, opts, modelPath)
 
     const proc = spawn(this.resolved.bin, argv, opts?.detach ? { stdio: "ignore", detached: true } : { stdio: "pipe" })
     if (opts?.detach) proc.unref()
