@@ -329,6 +329,9 @@ export function registerCli(program: Command): void {
           let firstTokenTs = 0
           let completionTokens = 0
           let promptTokens = Math.max(1, Math.round(opts.prompt.length / 4))
+          let serverPromptTps: number | undefined
+          let serverCompletionTps: number | undefined
+          let serverTtftMs: number | undefined
 
           while (true) {
             const { done, value } = await reader.read()
@@ -341,7 +344,8 @@ export function registerCli(program: Command): void {
               if (dataStr === "[DONE]") continue
               try {
                 const parsed = JSON.parse(dataStr)
-                if (parsed.choices?.[0]?.delta?.content) {
+                const delta = parsed.choices?.[0]?.delta
+                if (delta?.content || delta?.reasoning_content) {
                   if (!firstTokenTs) {
                     firstTokenTs = Date.now()
                   }
@@ -351,15 +355,20 @@ export function registerCli(program: Command): void {
                   if (parsed.usage.prompt_tokens) promptTokens = parsed.usage.prompt_tokens
                   if (parsed.usage.completion_tokens) completionTokens = parsed.usage.completion_tokens
                 }
+                if (parsed.timings) {
+                  if (parsed.timings.prompt_per_second) serverPromptTps = Number(parsed.timings.prompt_per_second.toFixed(2))
+                  if (parsed.timings.predicted_per_second) serverCompletionTps = Number(parsed.timings.predicted_per_second.toFixed(2))
+                  if (parsed.timings.prompt_ms) serverTtftMs = Number(parsed.timings.prompt_ms.toFixed(2))
+                }
               } catch {}
             }
           }
 
           const totalMs = Date.now() - startedAt
-          const ttftMs = firstTokenTs ? firstTokenTs - startedAt : totalMs
-          const genMs = Math.max(1, totalMs - ttftMs)
-          const promptTps = ttftMs > 0 ? Number(((promptTokens / (ttftMs / 1000))).toFixed(2)) : 0
-          const completionTps = genMs > 0 ? Number(((completionTokens / (genMs / 1000))).toFixed(2)) : 0
+          const ttftMs = serverTtftMs ?? (firstTokenTs ? firstTokenTs - startedAt : totalMs)
+          const genMs = Math.max(1, totalMs - (firstTokenTs ? firstTokenTs - startedAt : 0))
+          const promptTps = serverPromptTps ?? (ttftMs > 0 ? Number(((promptTokens / (ttftMs / 1000))).toFixed(2)) : 0)
+          const completionTps = serverCompletionTps ?? (genMs > 0 ? Number(((completionTokens / (genMs / 1000))).toFixed(2)) : 0)
 
           runResults.push({ ttftMs, promptTps, completionTps, promptTokens, completionTokens, totalMs })
           logger.log(`  Run ${i}/${runsCount}: TTFT: ${ttftMs.toFixed(1)}ms | Prompt TPS: ${promptTps.toFixed(2)} | Completion TPS: ${completionTps.toFixed(2)} | Total: ${totalMs}ms (prompt: ${promptTokens} tok, completion: ${completionTokens} tok)`)

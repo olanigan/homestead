@@ -66,6 +66,9 @@ async function executeCompletion(
   let firstTokenTs = 0
   let outputTokens = 0
   let promptTokens = Math.max(1, Math.round(prompt.length / 4)) // fallback approx
+  let serverPromptTps: number | undefined
+  let serverCompletionTps: number | undefined
+  let serverTtftMs: number | undefined
 
   while (true) {
     const { done, value } = await reader.read()
@@ -81,22 +84,28 @@ async function executeCompletion(
       if (dataStr === "[DONE]") continue
       try {
         const parsed = JSON.parse(dataStr)
-        if (parsed.choices?.[0]?.delta?.content) {
+        const delta = parsed.choices?.[0]?.delta
+        if (delta?.content || delta?.reasoning_content) {
           outputTokens++
         }
         if (parsed.usage) {
           if (parsed.usage.prompt_tokens) promptTokens = parsed.usage.prompt_tokens
           if (parsed.usage.completion_tokens) outputTokens = parsed.usage.completion_tokens
         }
+        if (parsed.timings) {
+          if (parsed.timings.prompt_per_second) serverPromptTps = Number(parsed.timings.prompt_per_second.toFixed(1))
+          if (parsed.timings.predicted_per_second) serverCompletionTps = Number(parsed.timings.predicted_per_second.toFixed(1))
+          if (parsed.timings.prompt_ms) serverTtftMs = Number(parsed.timings.prompt_ms.toFixed(1))
+        }
       } catch {}
     }
   }
 
   const totalMs = Date.now() - startedAt
-  const ttftMs = firstTokenTs ? firstTokenTs - startedAt : totalMs
-  const genMs = Math.max(1, totalMs - ttftMs)
-  const promptTps = Number(((promptTokens / (ttftMs / 1000))).toFixed(1))
-  const completionTps = Number(((outputTokens / (genMs / 1000))).toFixed(1))
+  const ttftMs = serverTtftMs ?? (firstTokenTs ? firstTokenTs - startedAt : totalMs)
+  const genMs = Math.max(1, totalMs - (firstTokenTs ? firstTokenTs - startedAt : 0))
+  const promptTps = serverPromptTps ?? Number(((promptTokens / (ttftMs / 1000))).toFixed(1))
+  const completionTps = serverCompletionTps ?? Number(((outputTokens / (genMs / 1000))).toFixed(1))
 
   return {
     ttftMs,
